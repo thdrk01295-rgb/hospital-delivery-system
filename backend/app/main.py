@@ -37,10 +37,21 @@ app.include_router(ws_router)               # WebSocket at /ws
 
 @app.on_event("startup")
 async def on_startup():
-    logger.info(
-        "DB initialization: run  alembic upgrade head  before starting the server. "
-        "The app does NOT auto-migrate on startup."
-    )
+    # Ensure tables exist (dev convenience; in production run alembic upgrade head first)
+    try:
+        from app.db.init_db import create_all_tables
+        create_all_tables()
+        logger.info("DB tables verified.")
+    except Exception as exc:
+        logger.warning(f"DB table init skipped: {exc}")
+
+    # Seed fixed locations — idempotent, skips rows that already exist
+    try:
+        from seeds.seed_locations import seed_all
+        seed_all()
+        logger.info("Location seed complete.")
+    except Exception as exc:
+        logger.warning(f"Location seeding skipped: {exc}")
 
     logger.info("Starting MQTT client...")
     set_event_loop(asyncio.get_event_loop())

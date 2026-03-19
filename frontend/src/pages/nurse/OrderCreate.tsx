@@ -24,7 +24,11 @@ const ORDER_TYPES: { value: TaskType; label: string }[] = [
   { value: 'battery_low',             label: '배터리 부족 (Battery Low)' },
 ]
 
-const CLOTHES_TYPES: TaskType[] = ['clothes_refill', 'used_clothes_collection', 'patient_clothes_rental', 'patient_clothes_return']
+// Nurse logistics task types that carry clothing quantity fields
+const CLOTHES_TYPES: TaskType[] = ['clothes_refill', 'used_clothes_collection']
+
+// Task types that do NOT require a destination (system/autonomous tasks)
+const NO_DEST_REQUIRED: TaskType[] = ['emergency_call', 'battery_low']
 
 type LocMode = 'fixed' | 'bed'
 
@@ -64,6 +68,17 @@ export function OrderCreate() {
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
     setError(null)
+
+    // Client-side validation: destination is required for all non-system task types
+    if (!NO_DEST_REQUIRED.includes(taskType) && destId === null) {
+      if (destMode === 'bed') {
+        setError('침상 목적지를 선택하세요. (목적지 침상이 아직 선택되지 않았습니다.)')
+      } else {
+        setError('목적지를 선택하세요.')
+      }
+      return
+    }
+
     setSubmitting(true)
     const body: NurseOrderCreate = {
       task_type: taskType,
