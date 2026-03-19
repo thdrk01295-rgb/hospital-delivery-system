@@ -239,7 +239,7 @@ export function PatientRequestPage() {
 
   function handleLogout() {
     logout()
-    navigate('/patient/login', { replace: true })
+    navigate('/login/patient', { replace: true })
   }
 
   // ── Render screen based on mode ──────────────────────────────────────────
