@@ -11,7 +11,7 @@ export function ProtectedRoute({ children, role }: Props) {
   const { token, role: userRole } = useAuthStore()
 
   if (!token || userRole !== role) {
-    return <Navigate to={role === 'nurse' ? '/nurse/login' : '/patient/login'} replace />
+    return <Navigate to={role === 'nurse' ? '/login/nurse' : '/login/patient'} replace />
   }
 
   return <>{children}</>

@@ -79,7 +79,7 @@ export function NurseDashboard() {
 
   function handleLogout() {
     logout()
-    navigate('/nurse/login', { replace: true })
+    navigate('/login/nurse', { replace: true })
   }
 
   const battery = robot?.battery_percent ?? 0
@@ -109,8 +109,8 @@ export function NurseDashboard() {
         </div>
 
         <nav style={{ display: 'flex', gap: 10 }}>
-          <Link to="/nurse/robot-dashboard" style={navBtn}>로봇 대시보드</Link>
-          <Link to="/nurse/order"           style={navBtn}>오더 생성</Link>
+          <Link to="/nurse/robot"      style={navBtn}>로봇 대시보드</Link>
+          <Link to="/nurse/orders/new" style={navBtn}>오더 생성</Link>
           <button onClick={handleLogout}    style={{ ...navBtn, border: '1px solid #e74c3c', background: 'transparent', color: '#e74c3c', cursor: 'pointer' }}>
             로그아웃
           </button>

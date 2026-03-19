@@ -33,7 +33,7 @@ export function LoginPage({ variant }: Props) {
         ? await loginNurse(username, password)
         : await loginPatient(username, password)
       setAuth(res.access_token, res.role, res.bed_code ?? null)
-      navigate(variant === 'nurse' ? '/nurse/dashboard' : '/patient', { replace: true })
+      navigate(variant === 'nurse' ? '/nurse/dashboard' : '/patient', { replace: true })  // dashboard routes unchanged
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : '로그인 실패')
     } finally {
@@ -95,7 +95,7 @@ export function LoginPage({ variant }: Props) {
         {variant === 'nurse' && (
           <p style={{ textAlign: 'center', marginTop: '1rem', fontSize: '0.85rem', color: '#888' }}>
             환자 로그인은{' '}
-            <a href="/patient/login" style={{ color: '#2980b9' }}>여기</a>
+            <a href="/login/patient" style={{ color: '#2980b9' }}>여기</a>
           </p>
         )}
       </form>

@@ -2,12 +2,12 @@
  * App — route structure + protected routing + global WebSocket connection.
  *
  * Route map:
- *   /                        → redirect to /nurse/login
- *   /nurse/login             → LoginPage (nurse variant)
- *   /patient/login           → LoginPage (patient variant)
+ *   /                        → redirect to /login/nurse
+ *   /login/nurse             → LoginPage (nurse variant)
+ *   /login/patient           → LoginPage (patient variant)
  *   /nurse/dashboard         → NurseDashboard    [nurse only]
- *   /nurse/robot-dashboard   → RobotDashboard    [nurse only]
- *   /nurse/order             → OrderCreate        [nurse only]
+ *   /nurse/robot             → RobotDashboard    [nurse only]
+ *   /nurse/orders/new        → OrderCreate        [nurse only]
  *   /patient                 → PatientRequestPage [patient only]
  *
  * WebSocket:
@@ -36,11 +36,11 @@ export default function App() {
   return (
     <Routes>
       {/* Root redirect */}
-      <Route path="/" element={<Navigate to="/nurse/login" replace />} />
+      <Route path="/" element={<Navigate to="/login/nurse" replace />} />
 
       {/* Auth */}
-      <Route path="/nurse/login"   element={<LoginPage variant="nurse"   />} />
-      <Route path="/patient/login" element={<LoginPage variant="patient" />} />
+      <Route path="/login/nurse"   element={<LoginPage variant="nurse"   />} />
+      <Route path="/login/patient" element={<LoginPage variant="patient" />} />
 
       {/* Nurse pages */}
       <Route
@@ -48,11 +48,11 @@ export default function App() {
         element={<ProtectedRoute role="nurse"><NurseDashboard /></ProtectedRoute>}
       />
       <Route
-        path="/nurse/robot-dashboard"
+        path="/nurse/robot"
         element={<ProtectedRoute role="nurse"><RobotDashboard /></ProtectedRoute>}
       />
       <Route
-        path="/nurse/order"
+        path="/nurse/orders/new"
         element={<ProtectedRoute role="nurse"><OrderCreate /></ProtectedRoute>}
       />
 
