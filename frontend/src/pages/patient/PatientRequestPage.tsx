@@ -62,8 +62,9 @@ function ServiceButton({ label, sublabel, color, onClick, disabled }: {
 }
 
 // Size selection shown after rental/return button pressed (before submission)
-function SizeForm({ title, onSubmit, onCancel, submitting }: {
+function SizeForm({ title, submitLabel, onSubmit, onCancel, submitting }: {
   title: string
+  submitLabel: string
   onSubmit: (sizes: { top: number; bottom: number; bedding: number; other: number }) => void
   onCancel: () => void
   submitting: boolean
@@ -98,7 +99,7 @@ function SizeForm({ title, onSubmit, onCancel, submitting }: {
           disabled={submitting}
           style={{ ...primaryBtn, opacity: submitting ? 0.7 : 1 }}
         >
-          {submitting ? '신청 중...' : '대여 신청'}
+          {submitting ? '신청 중...' : submitLabel}
         </button>
       </div>
     </div>
@@ -249,6 +250,7 @@ export function PatientRequestPage() {
     screen = (
       <SizeForm
         title="의류 대여 — 수량 선택"
+        submitLabel="대여 신청"
         onSubmit={(s) => submitRequest('patient_clothes_rental', s)}
         onCancel={() => setSizeFormMode(null)}
         submitting={submitting}
@@ -258,6 +260,7 @@ export function PatientRequestPage() {
     screen = (
       <SizeForm
         title="의류 반납 — 수량 선택"
+        submitLabel="반납 신청"
         onSubmit={(s) => submitRequest('patient_clothes_return', s)}
         onCancel={() => setSizeFormMode(null)}
         submitting={submitting}
