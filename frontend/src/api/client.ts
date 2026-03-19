@@ -27,8 +27,13 @@ async function request<T>(
   })
 
   if (!res.ok) {
-    const detail = await res.json().catch(() => ({ detail: res.statusText }))
-    throw new Error(detail?.detail ?? `HTTP ${res.status}`)
+    const body = await res.json().catch(() => ({ detail: res.statusText }))
+    const raw = body?.detail
+    // FastAPI 422 returns detail as an array of validation error objects
+    const msg = Array.isArray(raw)
+      ? (raw[0]?.msg ?? raw[0]?.message ?? `HTTP ${res.status}`)
+      : (raw ?? `HTTP ${res.status}`)
+    throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg))
   }
 
   // 204 No Content or empty body
