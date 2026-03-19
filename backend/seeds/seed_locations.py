@@ -16,7 +16,6 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.db.session import SessionLocal
-from app.db.init_db import init_db
 from app.models.location import Location
 from app.constants.enums import LocationType
 from app.utils.location_utils import build_bed_code, NON_BED_DISPLAY
@@ -81,8 +80,9 @@ def seed_all(db=None) -> None:
 
 
 if __name__ == "__main__":
+    from app.db.init_db import create_all_tables
     print("Initializing tables...")
-    init_db()
+    create_all_tables()
     print("Seeding locations...")
     seed_all()
     print("Done.")
