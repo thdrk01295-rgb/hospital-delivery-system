@@ -6,6 +6,8 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     return LaunchDescription([
+
+        # ===== motor params =====
         DeclareLaunchArgument('port', default_value='/dev/ttyACM0'),
         DeclareLaunchArgument('baudrate', default_value='115200'),
         DeclareLaunchArgument('wheel_separation', default_value='0.330'),
@@ -26,5 +28,17 @@ def generate_launch_description():
                 'max_wheel_speed': LaunchConfiguration('max_wheel_speed'),
                 'watchdog_timeout': LaunchConfiguration('watchdog_timeout'),
             }]
+        ),
+
+        Node(
+            package='teleop_twist_keyboard',
+            executable='teleop_twist_keyboard',
+            name='teleop_keyboard',
+            prefix='xterm -e',   
+            output='screen',
+            remappings=[
+                ('/cmd_vel', '/cmd_vel')
+            ]
         )
+
     ])
