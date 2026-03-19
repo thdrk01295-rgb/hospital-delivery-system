@@ -8,8 +8,8 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('port', default_value='/dev/ttyACM0'),
         DeclareLaunchArgument('baudrate', default_value='115200'),
-        DeclareLaunchArgument('wheel_separation', default_value='0.30'),
-        DeclareLaunchArgument('wheel_radius', default_value='0.05'),
+        DeclareLaunchArgument('wheel_separation', default_value='0.330'),
+        DeclareLaunchArgument('wheel_radius', default_value='0.0625'),
         DeclareLaunchArgument('max_wheel_speed', default_value='1.0'),
         DeclareLaunchArgument('watchdog_timeout', default_value='0.5'),
 
