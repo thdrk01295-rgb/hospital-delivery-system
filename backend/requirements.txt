@@ -9,5 +9,5 @@ passlib[bcrypt]>=1.7.4
 python-multipart>=0.0.6
 paho-mqtt>=1.6.1
 websockets>=12.0
-alembic>=1.12.0
+alembic>=1.13.0
 python-dotenv>=1.0.0

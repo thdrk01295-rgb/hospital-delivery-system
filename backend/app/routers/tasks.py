@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, Header, status
+import asyncio
+
+from fastapi import APIRouter, Depends, HTTPException, Header, status, BackgroundTasks
 from sqlalchemy.orm import Session
 from typing import Optional
 
@@ -11,9 +13,13 @@ from app.services.task_service import (
     get_ongoing_tasks,
     get_completed_tasks,
     create_emergency_task,
+    update_task_status,
 )
+from app.services.abnormal_event_service import open_event
 from app.services.auth_service import decode_token
-from app.constants.enums import TaskType
+from app.constants.enums import TaskType, TaskStatus
+from app.constants import ws_events
+from app.websocket.manager import ws_manager
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
@@ -43,14 +49,25 @@ def create_order(
 
 
 @router.post("/nurse/emergency", response_model=TaskRead, status_code=status.HTTP_201_CREATED)
-def trigger_emergency(
+async def trigger_emergency(
     authorization: Optional[str] = Header(default=None),
     db: Session = Depends(get_db),
 ):
     payload = _get_token_payload(authorization)
     if payload.get("role") != "nurse":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Nurses only")
-    return create_emergency_task(db)
+
+    task = create_emergency_task(db)
+
+    # Record an abnormal event for the emergency call
+    event = open_event(db, "emergency_call", related_task_id=task.id,
+                       note="Emergency station call triggered by nurse")
+    await ws_manager.broadcast(
+        ws_events.ABNORMAL_EVENT_UPDATE,
+        {"event_type": "emergency_call", "event_id": event.id,
+         "active": True, "related_task_id": task.id},
+    )
+    return task
 
 
 # ── Patient endpoints ────────────────────────────────────────────────────────
@@ -87,6 +104,40 @@ def patient_clothing_request(
                             detail="Invalid task type for patient request")
     bed_code = payload.get("bed_code")
     return create_patient_task(db, body, bed_code=bed_code)
+
+
+@router.post("/{task_id}/complete", response_model=TaskRead)
+async def patient_complete_task(
+    task_id: int,
+    authorization: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    """
+    Called by the patient when they press the 완료 button in DELIVERY_OPEN_PAT state.
+    Marks the task COMPLETE and broadcasts task_status_update.
+    """
+    payload = _get_token_payload(authorization)
+    if payload.get("role") != "patient":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Patients only")
+
+    bed_code = payload.get("bed_code")
+
+    # Verify the task belongs to this patient
+    from app.models.task import Task
+    task = db.query(Task).filter(Task.id == task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task.patient_bed_code != bed_code:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail="Task does not belong to this patient")
+    if task.status not in (TaskStatus.DISPATCHED, TaskStatus.IN_PROGRESS):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail=f"Task cannot be completed from status '{task.status}'")
+
+    task = update_task_status(db, task_id, TaskStatus.COMPLETE)
+    task_dict = TaskRead.model_validate(task).model_dump(mode="json")
+    await ws_manager.broadcast(ws_events.TASK_STATUS_UPDATE, task_dict)
+    return task
 
 
 # ── Shared / nurse dashboard endpoints ──────────────────────────────────────

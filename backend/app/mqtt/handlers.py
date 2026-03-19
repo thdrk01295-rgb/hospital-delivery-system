@@ -50,6 +50,7 @@ def dispatch_message(topic: str, payload: dict) -> None:
 def _handle_robot_status(raw: dict) -> None:
     from app.db.session import SessionLocal
     from app.services.robot_service import update_robot_state, get_robot_status_dict
+    from app.services.abnormal_event_service import open_event, resolve_all_by_type
     from app.websocket.manager import ws_manager
     from app.scheduler.dispatcher import maybe_dispatch
 
@@ -60,8 +61,23 @@ def _handle_robot_status(raw: dict) -> None:
         status_dict = get_robot_status_dict(robot)
         _schedule(ws_manager.broadcast(ws_events.ROBOT_STATE_UPDATE, status_dict))
 
-        # If robot just became IDLE (finished a task), try dispatching the next task.
+        # Low-battery state → open a low_battery abnormal event
+        if data.state == RobotState.LOW_BATTERY:
+            event = open_event(db, "low_battery", note="Robot reported LOW_BATTERY state")
+            _schedule(ws_manager.broadcast(
+                ws_events.ABNORMAL_EVENT_UPDATE,
+                {"event_type": "low_battery", "event_id": event.id, "active": True},
+            ))
+
+        # Robot returned to IDLE → resolve any open error / low_battery events
         if data.state == RobotState.IDLE:
+            for etype in ("error", "low_battery"):
+                resolved = resolve_all_by_type(db, etype)
+                if resolved:
+                    _schedule(ws_manager.broadcast(
+                        ws_events.ABNORMAL_EVENT_UPDATE,
+                        {"event_type": etype, "active": False},
+                    ))
             _schedule(maybe_dispatch(db))
     finally:
         db.close()
@@ -100,6 +116,7 @@ def _handle_robot_battery(raw: dict) -> None:
 def _handle_robot_error(raw: dict) -> None:
     from app.db.session import SessionLocal
     from app.services.robot_service import update_robot_state, get_robot_status_dict
+    from app.services.abnormal_event_service import open_event
     from app.websocket.manager import ws_manager
 
     data = MqttRobotErrorPayload(**raw)
@@ -108,6 +125,14 @@ def _handle_robot_error(raw: dict) -> None:
         robot = update_robot_state(db, data.robot_id, RobotState.ERROR)
         status_dict = get_robot_status_dict(robot)
         _schedule(ws_manager.broadcast(ws_events.ROBOT_STATE_UPDATE, status_dict))
+
+        # Open an error abnormal event and broadcast it
+        event = open_event(db, "error", note=data.error_message)
+        _schedule(ws_manager.broadcast(
+            ws_events.ABNORMAL_EVENT_UPDATE,
+            {"event_type": "error", "event_id": event.id, "active": True,
+             "note": data.error_message},
+        ))
     finally:
         db.close()
 

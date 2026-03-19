@@ -4,8 +4,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.db.init_db import init_db
-from app.routers import auth, locations, tasks, robot, inventory
+from app.routers import auth, locations, tasks, robot, inventory, abnormal_events
 from app.websocket.router import router as ws_router
 from app.mqtt.client import start_mqtt
 from app.mqtt.handlers import set_event_loop
@@ -27,18 +26,21 @@ app.add_middleware(
 )
 
 # ── Routers ──────────────────────────────────────────────────────────────────
-app.include_router(auth.router,      prefix="/api")
-app.include_router(locations.router, prefix="/api")
-app.include_router(tasks.router,     prefix="/api")
-app.include_router(robot.router,     prefix="/api")
-app.include_router(inventory.router, prefix="/api")
-app.include_router(ws_router)        # WebSocket at /ws
+app.include_router(auth.router,             prefix="/api")
+app.include_router(locations.router,        prefix="/api")
+app.include_router(tasks.router,            prefix="/api")
+app.include_router(robot.router,            prefix="/api")
+app.include_router(inventory.router,        prefix="/api")
+app.include_router(abnormal_events.router,  prefix="/api")
+app.include_router(ws_router)               # WebSocket at /ws
 
 
 @app.on_event("startup")
 async def on_startup():
-    logger.info("Initializing database tables...")
-    init_db()
+    logger.info(
+        "DB initialization: run  alembic upgrade head  before starting the server. "
+        "The app does NOT auto-migrate on startup."
+    )
 
     logger.info("Starting MQTT client...")
     set_event_loop(asyncio.get_event_loop())
