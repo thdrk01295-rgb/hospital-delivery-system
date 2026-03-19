@@ -47,10 +47,11 @@ export const useTaskStore = create<TaskState>((set) => ({
         // Move from ongoing → completed
         const ongoing   = s.ongoingTasks.filter((t) => t.id !== updated.id)
         const completed = [updated, ...s.completedTasks.filter((t) => t.id !== updated.id)]
-        // Clear patient active task if done
-        const patientActiveTask =
-          newPatient?.id === updated.id ? null : newPatient
-        return { ongoingTasks: ongoing, completedTasks: completed, patientActiveTask }
+        // Keep patientActiveTask set to the DONE task so PatientScreenController
+        // can still reach COMPLETE screen (robot state = COMPLETE) via Rule 4.
+        // PatientRequestPage's 3-second auto-reset calls setPatientActiveTask(null)
+        // after the COMPLETE screen, which is the correct cleanup point.
+        return { ongoingTasks: ongoing, completedTasks: completed, patientActiveTask: newPatient }
       }
 
       return {}

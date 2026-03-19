@@ -9,6 +9,8 @@ from app.services.abnormal_event_service import (
     get_event_history,
     resolve_event,
 )
+from app.websocket.manager import ws_manager
+from app.constants import ws_events
 
 router = APIRouter(prefix="/abnormal-events", tags=["abnormal-events"])
 
@@ -28,8 +30,13 @@ def abnormal_event_history(db: Session = Depends(get_db)):
 
 
 @router.post("/{event_id}/resolve", response_model=AbnormalEventRead)
-def resolve_abnormal_event(event_id: int, db: Session = Depends(get_db)):
+async def resolve_abnormal_event(event_id: int, db: Session = Depends(get_db)):
     event = resolve_event(db, event_id)
     if not event:
         raise HTTPException(status_code=404, detail="Abnormal event not found")
+    # Broadcast to all connected clients so every nurse tab clears its banner
+    await ws_manager.broadcast(
+        ws_events.ABNORMAL_EVENT_UPDATE,
+        {"event_type": event.event_type, "event_id": event.id, "active": False},
+    )
     return event
