@@ -9,9 +9,16 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 
+find_library(GPIOD_LIB gpiod REQUIRED)
+find_library(I2C_LIB i2c REQUIRED)
+
 add_executable(tof_node src/tof_node.cpp)
 ament_target_dependencies(tof_node rclcpp sensor_msgs)
-target_link_libraries(tof_node gpiod i2c)
+
+target_link_libraries(tof_node
+  ${GPIOD_LIB}
+  ${I2C_LIB}
+)
 
 install(TARGETS
   tof_node
