@@ -28,5 +28,22 @@ def generate_launch_description():
                 'max_rpm': LaunchConfiguration('max_rpm'),
                 'watchdog_timeout': LaunchConfiguration('watchdog_timeout'),
             }]
-        )
+        ),
+        Node(
+            package='control',
+            executable='encoder_odom_node',
+            name='encoder_odom_node',
+            output='screen',
+            parameters=[{
+                'wheel_radius': 0.0625,
+                'wheel_separation': 0.330,
+                'ticks_per_revolution': 2048,
+                'feedback_topic': '/motor_feedback_raw',
+                'odom_topic': '/odom',
+                'odom_frame': 'odom',
+                'base_frame': 'base_link',
+                'publish_tf': True,
+                'use_total_counts': True
+            }]
+        ),
     ])
