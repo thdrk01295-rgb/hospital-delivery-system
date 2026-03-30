@@ -41,7 +41,7 @@ def authenticate_patient(username: str, password: str, db: Session) -> tuple[str
     location = db.query(Location).filter(
         Location.location_code == bed_code,
         Location.location_type == LocationType.BED,
-        Location.is_active.is_(True),
+        Location.is_active == True,
     ).first()
 
     if not location:

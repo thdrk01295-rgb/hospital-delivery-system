@@ -37,14 +37,8 @@ app.include_router(ws_router)               # WebSocket at /ws
 
 @app.on_event("startup")
 async def on_startup():
-    import os
     from app.config.settings import settings
-
-    db_url = settings.DATABASE_URL
-    logger.info(f"DATABASE_URL: {db_url}")
-    if db_url.startswith("sqlite"):
-        db_path = db_url.replace("sqlite:///", "")
-        logger.info(f"SQLite file (absolute): {os.path.abspath(db_path)}")
+    logger.info(f"DATABASE_URL: {settings.DATABASE_URL}")
 
     # Ensure tables exist (dev convenience; in production run alembic upgrade head first)
     try:

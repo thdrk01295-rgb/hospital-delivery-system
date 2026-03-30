@@ -11,14 +11,14 @@ router = APIRouter(prefix="/locations", tags=["locations"])
 
 @router.get("/", response_model=list[LocationRead])
 def list_locations(db: Session = Depends(get_db)):
-    return db.query(Location).filter(Location.is_active.is_(True)).all()
+    return db.query(Location).filter(Location.is_active == True).all()
 
 
 @router.get("/non-bed", response_model=list[LocationRead])
 def list_non_bed_locations(db: Session = Depends(get_db)):
     return (
         db.query(Location)
-        .filter(Location.location_type != LocationType.BED, Location.is_active.is_(True))
+        .filter(Location.location_type != LocationType.BED, Location.is_active == True)
         .all()
     )
 
