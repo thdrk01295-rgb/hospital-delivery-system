@@ -1,4 +1,3 @@
-from typing import Optional
 from pydantic_settings import BaseSettings
 
 
@@ -10,8 +9,10 @@ class Settings(BaseSettings):
     DB_USER: str = "sa"
     DB_PASSWORD: str = "YourPassword!"
 
-    # Optional full URL override (useful for SQLite in dev/CI — overrides all DB_* fields)
-    DATABASE_URL_OVERRIDE: Optional[str] = None
+    # Full DB URL. Defaults to a local SQLite file so the app works out-of-the-box
+    # without any external database. Set this to a mssql+pyodbc:// URL (or any
+    # SQLAlchemy URL) to use a different database.
+    DATABASE_URL_OVERRIDE: str = "sqlite:///./hospital_amr.db"
 
     # MQTT
     MQTT_HOST: str = "localhost"
@@ -42,13 +43,7 @@ class Settings(BaseSettings):
 
     @property
     def DATABASE_URL(self) -> str:
-        if self.DATABASE_URL_OVERRIDE:
-            return self.DATABASE_URL_OVERRIDE
-        return (
-            f"mssql+pyodbc://{self.DB_USER}:{self.DB_PASSWORD}"
-            f"@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
-            "?driver=ODBC+Driver+17+for+SQL+Server"
-        )
+        return self.DATABASE_URL_OVERRIDE
 
     class Config:
         env_file = ".env"
