@@ -37,6 +37,15 @@ app.include_router(ws_router)               # WebSocket at /ws
 
 @app.on_event("startup")
 async def on_startup():
+    import os
+    from app.config.settings import settings
+
+    db_url = settings.DATABASE_URL
+    logger.info(f"DATABASE_URL: {db_url}")
+    if db_url.startswith("sqlite"):
+        db_path = db_url.replace("sqlite:///", "")
+        logger.info(f"SQLite file (absolute): {os.path.abspath(db_path)}")
+
     # Ensure tables exist (dev convenience; in production run alembic upgrade head first)
     try:
         from app.db.init_db import create_all_tables
@@ -48,8 +57,13 @@ async def on_startup():
     # Seed fixed locations — idempotent, skips rows that already exist
     try:
         from seeds.seed_locations import seed_all
+        from app.db.session import SessionLocal
+        from app.models.location import Location
         seed_all()
-        logger.info("Location seed complete.")
+        db = SessionLocal()
+        count = db.query(Location).count()
+        db.close()
+        logger.info(f"Location seed complete. Total locations in DB: {count}")
     except Exception as exc:
         logger.warning(f"Location seeding skipped: {exc}")
 

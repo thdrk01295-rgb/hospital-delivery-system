@@ -1,4 +1,10 @@
+import os
 from pydantic_settings import BaseSettings
+
+# Absolute path to the backend/ directory, regardless of launch CWD.
+# __file__ = backend/app/config/settings.py  →  3 × dirname  =  backend/
+_BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_DEFAULT_SQLITE_URL = f"sqlite:///{os.path.join(_BACKEND_DIR, 'hospital_amr.db')}"
 
 
 class Settings(BaseSettings):
@@ -9,10 +15,9 @@ class Settings(BaseSettings):
     DB_USER: str = "sa"
     DB_PASSWORD: str = "YourPassword!"
 
-    # Full DB URL. Defaults to a local SQLite file so the app works out-of-the-box
-    # without any external database. Set this to a mssql+pyodbc:// URL (or any
-    # SQLAlchemy URL) to use a different database.
-    DATABASE_URL_OVERRIDE: str = "sqlite:///./hospital_amr.db"
+    # Full DB URL. Defaults to backend/hospital_amr.db (absolute path, CWD-independent).
+    # Override with a mssql+pyodbc:// URL (or any SQLAlchemy URL) for production.
+    DATABASE_URL_OVERRIDE: str = _DEFAULT_SQLITE_URL
 
     # MQTT
     MQTT_HOST: str = "localhost"
