@@ -52,9 +52,12 @@ export function OrderCreate() {
   const [nonBedLocations, setNonBedLocations] = useState<Location[]>([])
   const [allLocations,    setAllLocations]    = useState<Location[]>([])
   const [bedMeta,         setBedMeta]         = useState<BedSelectorMeta | null>(null)
+  const [locLoadError,    setLocLoadError]    = useState<string | null>(null)
 
   useEffect(() => {
-    fetchNonBedLocations().then(setNonBedLocations).catch(console.error)
+    fetchNonBedLocations()
+      .then((locs) => { setNonBedLocations(locs); setLocLoadError(null) })
+      .catch((err: Error) => setLocLoadError(`위치 목록 로드 실패: ${err.message}`))
     fetchBedSelectorMeta().then(setBedMeta).catch(console.error)
     fetchLocations().then(setAllLocations).catch(console.error)
   }, [])
@@ -118,6 +121,13 @@ export function OrderCreate() {
             {ORDER_TYPES.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
           </select>
         </label>
+
+        {/* Location load error */}
+        {locLoadError && (
+          <p style={{ color: '#c0392b', background: '#fdf2f2', border: '1px solid #e74c3c', borderRadius: 5, padding: '0.5rem 0.75rem', marginBottom: '1rem' }}>
+            {locLoadError}
+          </p>
+        )}
 
         {/* Origin Location */}
         <fieldset style={fs}>
