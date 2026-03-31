@@ -18,7 +18,7 @@ def list_locations(db: Session = Depends(get_db)):
 def list_non_bed_locations(db: Session = Depends(get_db)):
     return (
         db.query(Location)
-        .filter(Location.location_type != LocationType.BED, Location.is_active == True)
+        .filter(Location.location_type != LocationType.BED.value, Location.is_active == True)
         .all()
     )
 

@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="Hospital Logistics AMR API",
     version="1.0.0",
+    redirect_slashes=False,
 )
 
 app.add_middleware(
