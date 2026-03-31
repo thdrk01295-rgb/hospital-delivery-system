@@ -9,7 +9,7 @@ from app.constants.enums import LocationType
 router = APIRouter(prefix="/locations", tags=["locations"])
 
 
-@router.get("/", response_model=list[LocationRead])
+@router.get("", response_model=list[LocationRead])
 def list_locations(db: Session = Depends(get_db)):
     return db.query(Location).filter(Location.is_active == True).all()
 
