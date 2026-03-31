@@ -12,7 +12,7 @@ from app.services.inventory_service import (
 router = APIRouter(prefix="/inventory", tags=["inventory"])
 
 
-@router.get("/", response_model=list[InventoryRead])
+@router.get("", response_model=list[InventoryRead])
 def list_inventory(db: Session = Depends(get_db)):
     return get_all_inventory(db)
 
