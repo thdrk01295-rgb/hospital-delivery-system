@@ -36,7 +36,7 @@ def _get_token_payload(authorization: Optional[str]) -> dict:
 # ── Nurse endpoints ──────────────────────────────────────────────────────────
 
 @router.post("/nurse/order", response_model=TaskRead, status_code=status.HTTP_201_CREATED)
-def create_order(
+async def create_order(
     body: NurseOrderCreate,
     authorization: Optional[str] = Header(default=None),
     db: Session = Depends(get_db),
@@ -45,6 +45,8 @@ def create_order(
     if payload.get("role") != "nurse":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Nurses only")
     task = create_nurse_task(db, body, nurse_id=payload.get("sub", "nurse"))
+    task_dict = TaskRead.model_validate(task).model_dump(mode="json")
+    await ws_manager.broadcast(ws_events.TASK_STATUS_UPDATE, task_dict)
     return task
 
 

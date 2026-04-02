@@ -116,11 +116,13 @@ function ItemSelectForm({ mode, onSubmit, onCancel, submitting }: {
 function ConfirmScreen({ title }: { title: string }) {
   const [cancelling, setCancelling] = useState(false)
   const setPatientActiveTask = useTaskStore((s) => s.setPatientActiveTask)
+  const applyTaskUpdate      = useTaskStore((s) => s.applyTaskUpdate)
 
   async function handleCancel() {
     setCancelling(true)
     try {
-      await cancelPatientTask()
+      const cancelled = await cancelPatientTask()
+      applyTaskUpdate(cancelled)
       setPatientActiveTask(null)
     } catch (err: unknown) {
       alert(err instanceof Error ? err.message : '취소 실패')
