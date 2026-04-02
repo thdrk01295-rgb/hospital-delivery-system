@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.models.task import Task
 from app.models.location import Location
+from app.models.robot import Robot
 from app.constants.enums import TaskStatus, TaskType, RequestedByRole
 from app.schemas.task import NurseOrderCreate, PatientClothingRequestCreate
 
@@ -37,20 +38,19 @@ def create_patient_task(db: Session, body: PatientClothingRequestCreate,
                         bed_code: str) -> Task:
     """
     Creates a patient clothes rental or return task.
-    Origin is resolved from the patient's bed_code.
-    Destination is the station (for return) or warehouse (for rental).
+    Destination = patient's bed (robot's first trip target).
+    Origin = robot's current location at task creation time.
     """
-    # Resolve origin: patient's bed
-    origin = db.query(Location).filter(Location.location_code == bed_code).first()
-    # Resolve destination based on task type
-    if body.task_type == TaskType.PATIENT_CLOTHES_RETURN:
-        dest = db.query(Location).filter(Location.location_type == "laundry").first()
-    else:
-        dest = db.query(Location).filter(Location.location_type == "warehouse").first()
+    # Destination: patient's bed — where the robot must travel first
+    dest = db.query(Location).filter(Location.location_code == bed_code).first()
+
+    # Origin: robot's current location
+    robot = db.query(Robot).order_by(Robot.id.asc()).first()
+    origin_id = robot.current_location_id if robot else None
 
     task = Task(
         task_type=body.task_type,
-        origin_location_id=origin.id if origin else None,
+        origin_location_id=origin_id,
         destination_location_id=dest.id if dest else None,
         patient_bed_code=bed_code,
         requested_by_role=RequestedByRole.PATIENT,
@@ -60,8 +60,6 @@ def create_patient_task(db: Session, body: PatientClothingRequestCreate,
         note=body.note,
         order_top=body.order_top,
         order_bottom=body.order_bottom,
-        order_bedding=body.order_bedding,
-        order_other=body.order_other,
     )
     db.add(task)
     db.commit()
