@@ -23,6 +23,10 @@ export function completeTask(taskId: number) {
   return api.post<Task>(`/tasks/${taskId}/complete`)
 }
 
+export function cancelPatientTask() {
+  return api.post<Task>('/tasks/patient/cancel')
+}
+
 // Shared
 export function fetchOngoingTasks() {
   return api.get<Task[]>('/tasks/ongoing')

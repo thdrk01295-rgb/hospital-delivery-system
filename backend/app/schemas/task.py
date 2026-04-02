@@ -36,8 +36,6 @@ class PatientClothingRequestCreate(BaseModel):
     note: Optional[str] = None
     order_top: Optional[int] = None
     order_bottom: Optional[int] = None
-    order_bedding: Optional[int] = None
-    order_other: Optional[int] = None
 
 
 # ── Response bodies ──────────────────────────────────────────────────────────

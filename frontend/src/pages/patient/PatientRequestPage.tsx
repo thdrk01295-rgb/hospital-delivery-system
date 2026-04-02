@@ -16,7 +16,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate }          from 'react-router-dom'
 import { fetchRobotStatus }     from '@/api/robot'
-import { fetchPatientActiveTask, submitPatientClothingRequest, completeTask } from '@/api/tasks'
+import { fetchPatientActiveTask, submitPatientClothingRequest, completeTask, cancelPatientTask } from '@/api/tasks'
 import { useRobotStore }        from '@/store/robotStore'
 import { useTaskStore }         from '@/store/taskStore'
 import { useAuthStore }         from '@/store/authStore'
@@ -61,43 +61,50 @@ function ServiceButton({ label, sublabel, color, onClick, disabled }: {
   )
 }
 
-// Size selection shown after rental/return button pressed (before submission)
-function SizeForm({ title, submitLabel, onSubmit, onCancel, submitting }: {
-  title: string
-  submitLabel: string
-  onSubmit: (sizes: { top: number; bottom: number; bedding: number; other: number }) => void
+// Item selection shown after rental/return button pressed (before submission)
+function ItemSelectForm({ mode, onSubmit, onCancel, submitting }: {
+  mode: 'rental' | 'return'
+  onSubmit: (top: boolean, bottom: boolean) => void
   onCancel: () => void
   submitting: boolean
 }) {
-  const [top,     setTop]     = useState(0)
-  const [bottom,  setBottom]  = useState(0)
-  const [bedding, setBedding] = useState(0)
-  const [other,   setOther]   = useState(0)
+  const [top,    setTop]    = useState(false)
+  const [bottom, setBottom] = useState(false)
+
+  const isRental = mode === 'rental'
+  const title = isRental ? '의류 대여 신청' : '의류 반납 신청'
+  const submitLabel = isRental ? '대여 신청' : '반납 신청'
+
+  const selStyle = (active: boolean): React.CSSProperties => ({
+    width: 130, height: 100, borderRadius: 12,
+    border: active ? '3px solid #2980b9' : '2px solid #ccc',
+    background: active ? '#eaf4fb' : '#f9f9f9', cursor: 'pointer',
+    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+    fontWeight: 700, fontSize: '1rem', gap: 4,
+    color: active ? '#2980b9' : '#555', transition: 'all 0.15s',
+  })
 
   return (
     <div style={centerBox}>
       <h2 style={{ marginBottom: '1.5rem' }}>{title}</h2>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: '1.5rem', minWidth: 280 }}>
-        {([['상의 (Top)',    top,     setTop    ],
-           ['하의 (Bottom)', bottom,  setBottom ],
-           ['침구 (Bedding)',bedding, setBedding],
-           ['기타 (Other)',  other,   setOther  ]] as const).map(([label, val, setter]) => (
-          <label key={label} style={{ display: 'flex', flexDirection: 'column', gap: 4, fontWeight: 600, fontSize: '0.9rem' }}>
-            {label}
-            <input
-              type="number" min={0} value={val}
-              onChange={(e) => setter(Number(e.target.value))}
-              style={{ padding: '0.5rem', border: '1px solid #ccc', borderRadius: 5, fontSize: '1rem' }}
-            />
-          </label>
-        ))}
+      <div style={{ display: 'flex', gap: '1.5rem', marginBottom: '2rem' }}>
+        <div style={selStyle(top)} onClick={() => setTop(!top)}>
+          <span style={{ fontSize: '1.8rem' }}>👕</span>
+          <span>상의</span>
+          {top && <span style={{ fontSize: '0.75rem' }}>선택됨</span>}
+        </div>
+        <div style={selStyle(bottom)} onClick={() => setBottom(!bottom)}>
+          <span style={{ fontSize: '1.8rem' }}>👖</span>
+          <span>하의</span>
+          {bottom && <span style={{ fontSize: '0.75rem' }}>선택됨</span>}
+        </div>
       </div>
       <div style={{ display: 'flex', gap: 12 }}>
         <button onClick={onCancel} style={cancelBtn}>취소</button>
         <button
-          onClick={() => onSubmit({ top, bottom, bedding, other })}
-          disabled={submitting}
-          style={{ ...primaryBtn, opacity: submitting ? 0.7 : 1 }}
+          onClick={() => onSubmit(top, bottom)}
+          disabled={submitting || (!top && !bottom)}
+          style={{ ...primaryBtn, opacity: (submitting || (!top && !bottom)) ? 0.5 : 1 }}
         >
           {submitting ? '신청 중...' : submitLabel}
         </button>
@@ -106,12 +113,35 @@ function SizeForm({ title, submitLabel, onSubmit, onCancel, submitting }: {
   )
 }
 
-function ConfirmScreen({ title, subtitle }: { title: string; subtitle?: string }) {
+function ConfirmScreen({ title }: { title: string }) {
+  const [cancelling, setCancelling] = useState(false)
+  const setPatientActiveTask = useTaskStore((s) => s.setPatientActiveTask)
+
+  async function handleCancel() {
+    setCancelling(true)
+    try {
+      await cancelPatientTask()
+      setPatientActiveTask(null)
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : '취소 실패')
+      setCancelling(false)
+    }
+  }
+
   return (
     <div style={centerBox}>
       <div style={{ fontSize: '4rem', marginBottom: '1rem' }}>🤖</div>
       <h2>{title}</h2>
-      {subtitle && <p style={{ color: '#666', marginTop: 8 }}>{subtitle}</p>}
+      <p style={{ color: '#666', marginTop: 8 }}>
+        로봇이 곧 도착합니다. 가급적 자리에서 기다려 주세요. 사정에 따라 시간이 소요될 수 있습니다.
+      </p>
+      <button
+        onClick={handleCancel}
+        disabled={cancelling}
+        style={{ ...cancelBtn, marginTop: '1.5rem', opacity: cancelling ? 0.6 : 1 }}
+      >
+        {cancelling ? '취소 중...' : '신청 취소'}
+      </button>
     </div>
   )
 }
@@ -185,7 +215,7 @@ function RobotStatusScreen({ state }: { state: RobotState }) {
 
 // ── Main page component ───────────────────────────────────────────────────────
 
-type SizeFormMode = 'rental' | 'return' | null
+type ItemFormMode = 'rental' | 'return' | null
 
 export function PatientRequestPage() {
   const navigate   = useNavigate()
@@ -193,7 +223,7 @@ export function PatientRequestPage() {
   const { robot, setRobot } = useRobotStore()
   const { patientActiveTask, setPatientActiveTask } = useTaskStore()
 
-  const [sizeFormMode, setSizeFormMode] = useState<SizeFormMode>(null)
+  const [itemFormMode, setItemFormMode] = useState<ItemFormMode>(null)
   const [submitting,   setSubmitting]   = useState(false)
 
   // Initial REST hydration on mount
@@ -218,19 +248,17 @@ export function PatientRequestPage() {
     return () => clearTimeout(id)
   }, [screenMode])
 
-  async function submitRequest(type: 'patient_clothes_rental' | 'patient_clothes_return', sizes: { top: number; bottom: number; bedding: number; other: number }) {
+  async function submitRequest(type: 'patient_clothes_rental' | 'patient_clothes_return', top: boolean, bottom: boolean) {
     setSubmitting(true)
     const body: PatientClothingRequestCreate = {
       task_type:    type,
-      order_top:    sizes.top,
-      order_bottom: sizes.bottom,
-      order_bedding:sizes.bedding,
-      order_other:  sizes.other,
+      order_top:    top    ? 1 : undefined,
+      order_bottom: bottom ? 1 : undefined,
     }
     try {
       const task = await submitPatientClothingRequest(body)
       setPatientActiveTask(task)
-      setSizeFormMode(null)
+      setItemFormMode(null)
     } catch (err: unknown) {
       alert(err instanceof Error ? err.message : '신청 실패')
     } finally {
@@ -246,23 +274,21 @@ export function PatientRequestPage() {
   // ── Render screen based on mode ──────────────────────────────────────────
   let screen: React.ReactNode
 
-  if (sizeFormMode === 'rental') {
+  if (itemFormMode === 'rental') {
     screen = (
-      <SizeForm
-        title="의류 대여 — 수량 선택"
-        submitLabel="대여 신청"
-        onSubmit={(s) => submitRequest('patient_clothes_rental', s)}
-        onCancel={() => setSizeFormMode(null)}
+      <ItemSelectForm
+        mode="rental"
+        onSubmit={(t, b) => submitRequest('patient_clothes_rental', t, b)}
+        onCancel={() => setItemFormMode(null)}
         submitting={submitting}
       />
     )
-  } else if (sizeFormMode === 'return') {
+  } else if (itemFormMode === 'return') {
     screen = (
-      <SizeForm
-        title="의류 반납 — 수량 선택"
-        submitLabel="반납 신청"
-        onSubmit={(s) => submitRequest('patient_clothes_return', s)}
-        onCancel={() => setSizeFormMode(null)}
+      <ItemSelectForm
+        mode="return"
+        onSubmit={(t, b) => submitRequest('patient_clothes_return', t, b)}
+        onCancel={() => setItemFormMode(null)}
         submitting={submitting}
       />
     )
@@ -271,17 +297,17 @@ export function PatientRequestPage() {
       case 'SERVICE_SELECTION':
         screen = (
           <ServiceSelection
-            onRental={() => setSizeFormMode('rental')}
-            onReturn={() => setSizeFormMode('return')}
+            onRental={() => setItemFormMode('rental')}
+            onReturn={() => setItemFormMode('return')}
             loading={submitting}
           />
         )
         break
       case 'RENTAL_CONFIRM':
-        screen = <ConfirmScreen title="대여 신청 접수됨" subtitle="로봇이 곧 도착합니다. 잠시만 기다려 주세요." />
+        screen = <ConfirmScreen title="대여 신청 접수됨" />
         break
       case 'RETURN_CONFIRM':
-        screen = <ConfirmScreen title="반납 신청 접수됨" subtitle="로봇이 곧 도착합니다. 잠시만 기다려 주세요." />
+        screen = <ConfirmScreen title="반납 신청 접수됨" />
         break
       case 'ROBOT_ARRIVED':
         screen = <RobotArrivedScreen />

@@ -124,8 +124,6 @@ export interface PatientClothingRequestCreate {
   note?: string
   order_top?: number
   order_bottom?: number
-  order_bedding?: number
-  order_other?: number
 }
 
 // ── Inventory ────────────────────────────────────────────────────────────────

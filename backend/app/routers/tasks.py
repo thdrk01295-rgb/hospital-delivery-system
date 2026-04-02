@@ -140,6 +140,32 @@ async def patient_complete_task(
     return task
 
 
+@router.post("/patient/cancel", response_model=TaskRead)
+async def patient_cancel_task(
+    authorization: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    """Cancels the patient's current active task (PENDING/DISPATCHED/IN_PROGRESS)."""
+    payload = _get_token_payload(authorization)
+    if payload.get("role") != "patient":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Patients only")
+
+    bed_code = payload.get("bed_code")
+    from app.models.task import Task
+    task = db.query(Task).filter(
+        Task.patient_bed_code == bed_code,
+        Task.status.in_([TaskStatus.PENDING, TaskStatus.DISPATCHED, TaskStatus.IN_PROGRESS]),
+    ).order_by(Task.created_at.desc()).first()
+
+    if not task:
+        raise HTTPException(status_code=404, detail="No active task to cancel")
+
+    task = update_task_status(db, task.id, TaskStatus.CANCELLED)
+    task_dict = TaskRead.model_validate(task).model_dump(mode="json")
+    await ws_manager.broadcast(ws_events.TASK_STATUS_UPDATE, task_dict)
+    return task
+
+
 # ── Shared / nurse dashboard endpoints ──────────────────────────────────────
 
 @router.get("/ongoing", response_model=list[TaskRead])
