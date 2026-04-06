@@ -2,7 +2,7 @@
 <package format="3">
   <name>description</name>
   <version>0.0.1</version>
-  <description>Simple URDF description package</description>
+  <description>Robot description package</description>
 
   <maintainer email="you@example.com">you</maintainer>
   <license>Apache-2.0</license>
@@ -15,6 +15,7 @@
   <exec_depend>rviz2</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
+  <exec_depend>xacro</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

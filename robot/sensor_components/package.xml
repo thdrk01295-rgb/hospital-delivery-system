@@ -2,15 +2,16 @@
 <package format="3">
   <name>sensor_components</name>
   <version>0.0.1</version>
-  <description>ToF and IMU sensor package for hospital robot</description>
+  <description>Sensor fusion and EKF configuration package for med_bot</description>
 
-  <maintainer email="you@example.com">you</maintainer>
+  <maintainer email="you@example.com">minje</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
-  <depend>rclcpp</depend>
-  <depend>sensor_msgs</depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>robot_localization</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>
