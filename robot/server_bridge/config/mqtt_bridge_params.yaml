@@ -1,0 +1,5 @@
+/**:
+  ros__parameters:
+    robot_id: "AMR-001"
+    broker_uri: "tcp://localhost:1883"
+    qos: 1
