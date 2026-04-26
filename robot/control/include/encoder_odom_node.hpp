@@ -4,7 +4,12 @@
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/int64_multi_array.hpp>
 #include <nav_msgs/msg/odometry.hpp>
+#include <geometry_msgs/msg/transform_stamped.hpp>
 #include <tf2_ros/transform_broadcaster.h>
+#include <tf2/LinearMath/Quaternion.h>
+
+#include <memory>
+#include <string>
 
 namespace motor_bridge
 {
@@ -16,10 +21,8 @@ public:
 
 private:
   void encoderTicksCallback(const std_msgs::msg::Int64MultiArray::SharedPtr msg);
-  void publishOdometry(
-    double d_left, double d_right,
-    const rclcpp::Time & stamp);
-  geometry_msgs::msg::Quaternion yawToQuaternion(double yaw) const;
+  void publishOdometry(const rclcpp::Time & stamp, double linear_vel, double angular_vel);
+  void publishTf(const rclcpp::Time & stamp);
 
   rclcpp::Subscription<std_msgs::msg::Int64MultiArray>::SharedPtr encoder_ticks_sub_;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
@@ -27,11 +30,8 @@ private:
 
   double wheel_radius_;
   double wheel_separation_;
-  double ticks_per_rev_left_;
-  double ticks_per_rev_right_;
-  bool invert_left_;
-  bool invert_right_;
-  bool publish_tf_;
+  int    ticks_per_rev_;
+  bool   publish_tf_;
 
   std::string odom_frame_;
   std::string base_frame_;
@@ -40,8 +40,8 @@ private:
   double y_;
   double yaw_;
 
-  bool first_msg_;
   rclcpp::Time last_time_;
+  bool first_msg_;
 };
 
 }  // namespace motor_bridge
