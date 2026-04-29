@@ -10,13 +10,12 @@ def generate_launch_description():
         # ===== motor params =====
         DeclareLaunchArgument('port', default_value='/dev/ttyACM0'),
         DeclareLaunchArgument('baudrate', default_value='115200'),
-        DeclareLaunchArgument('wheel_separation', default_value='0.330'),
-        DeclareLaunchArgument('wheel_radius', default_value='0.0625'),
-        DeclareLaunchArgument('max_rpm', default_value='60.0'),
+        DeclareLaunchArgument('wheel_separation', default_value='0.38'),
+        DeclareLaunchArgument('max_linear_vel', default_value='1.0'),
         DeclareLaunchArgument('watchdog_timeout', default_value='0.5'),
 
         Node(
-            package='motor_bridge',
+            package='control',
             executable='motor_bridge_node',
             name='motor_bridge_node',
             output='screen',
@@ -24,8 +23,7 @@ def generate_launch_description():
                 'port': LaunchConfiguration('port'),
                 'baudrate': LaunchConfiguration('baudrate'),
                 'wheel_separation': LaunchConfiguration('wheel_separation'),
-                'wheel_radius': LaunchConfiguration('wheel_radius'),
-                'max_rpm': LaunchConfiguration('max_rpm'),
+                'max_linear_vel': LaunchConfiguration('max_linear_vel'),
                 'watchdog_timeout': LaunchConfiguration('watchdog_timeout'),
             }]
         ),
@@ -35,15 +33,16 @@ def generate_launch_description():
             name='encoder_odom_node',
             output='screen',
             parameters=[{
-                'wheel_radius': 0.0625,
-                'wheel_separation': 0.330,
-                'ticks_per_revolution': 2048,
-                'feedback_topic': '/motor_feedback_raw',
-                'odom_topic': '/odom',
+                'encoder_ticks_topic': '/encoder_ticks',
+                'odom_topic': '/odom_raw',
                 'odom_frame': 'odom',
                 'base_frame': 'base_link',
-                'publish_tf': True,
-                'use_total_counts': True
+                'wheel_radius': 0.0625,
+                'wheel_separation': 0.38,
+                'ticks_per_revolution': 75.0,
+                'publish_tf': False,
+                'left_tick_sign': 1.0,
+                'right_tick_sign': 1.0
             }]
         ),
     ])

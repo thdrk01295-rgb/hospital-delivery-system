@@ -30,16 +30,14 @@ private:
   void serialReadLoop();
   void handleIncomingLine(const std::string & line);
 
-  bool parseFeedbackLine(
+  bool parseEncoderLine(
     const std::string & line,
-    float & rpm_l, float & rpm_r,
-    int32_t & stk_l, int32_t & stk_r,
-    uint32_t & tot_l, uint32_t & tot_r);
+    int64_t & left_delta_ticks, int64_t & right_delta_ticks,
+    float & left_rpm, float & right_rpm);
 
   void publishFeedback(
-    float rpm_l, float rpm_r,
-    int32_t stk_l, int32_t stk_r,
-    uint32_t tot_l, uint32_t tot_r);
+    int64_t left_delta_ticks, int64_t right_delta_ticks,
+    float left_rpm, float right_rpm);
 
   void cmdVelCallback(const geometry_msgs::msg::Twist::SharedPtr msg);
   void watchdogCallback();

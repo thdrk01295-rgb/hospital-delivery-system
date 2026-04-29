@@ -1,0 +1,12 @@
+encoder_odom_node:
+  ros__parameters:
+    encoder_ticks_topic: "/encoder_ticks"
+    odom_topic: "/odom_raw"
+    odom_frame: "odom"
+    base_frame: "base_link"
+    wheel_radius: 0.0625
+    wheel_separation: 0.38
+    ticks_per_revolution: 75.0
+    publish_tf: false
+    left_tick_sign: 1.0
+    right_tick_sign: 1.0

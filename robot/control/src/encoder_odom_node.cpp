@@ -13,31 +13,30 @@ EncoderOdomNode::EncoderOdomNode()
   last_time_(now()),
   first_msg_(true)
 {
-  wheel_radius_     = declare_parameter<double>("wheel_radius", 0.0625);
+  encoder_ticks_topic_ = declare_parameter<std::string>("encoder_ticks_topic", "/encoder_ticks");
+  odom_topic_ = declare_parameter<std::string>("odom_topic", "/odom_raw");
+  odom_frame_ = declare_parameter<std::string>("odom_frame", "odom");
+  base_frame_ = declare_parameter<std::string>("base_frame", "base_link");
+  wheel_radius_ = declare_parameter<double>("wheel_radius", 0.0625);
   wheel_separation_ = declare_parameter<double>("wheel_separation", 0.38);
-  ticks_per_rev_    = declare_parameter<int>("ticks_per_rev", 75);
-  publish_tf_       = declare_parameter<bool>("publish_tf", true);
-  odom_frame_       = declare_parameter<std::string>("odom_frame", "odom");
-  base_frame_       = declare_parameter<std::string>("base_frame", "base_link");
+  ticks_per_revolution_ = declare_parameter<double>("ticks_per_revolution", 75.0);
+  publish_tf_ = declare_parameter<bool>("publish_tf", false);
+  left_tick_sign_ = declare_parameter<double>("left_tick_sign", 1.0);
+  right_tick_sign_ = declare_parameter<double>("right_tick_sign", 1.0);
 
-  odom_pub_       = create_publisher<nav_msgs::msg::Odometry>("/odom", 20);
+  odom_pub_ = create_publisher<nav_msgs::msg::Odometry>(odom_topic_, 20);
   tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
 
   encoder_ticks_sub_ = create_subscription<std_msgs::msg::Int64MultiArray>(
-    "/encoder_ticks", 50,
+    encoder_ticks_topic_, 50,
     std::bind(&EncoderOdomNode::encoderTicksCallback, this, std::placeholders::_1));
 }
-
-// ---------------------------------------------------------------------------
-// Odometry update
-// ---------------------------------------------------------------------------
 
 void EncoderOdomNode::encoderTicksCallback(
   const std_msgs::msg::Int64MultiArray::SharedPtr msg)
 {
-  // Layout published by motor_bridge_node: [stk_l, stk_r, tot_l, tot_r]
-  if (msg->data.size() < 4) {
-    RCLCPP_WARN(get_logger(), "encoder_ticks: expected 4 fields, got %zu", msg->data.size());
+  if (msg->data.size() < 2) {
+    RCLCPP_ERROR(get_logger(), "encoder_ticks: expected at least 2 fields, got %zu", msg->data.size());
     return;
   }
 
@@ -49,28 +48,27 @@ void EncoderOdomNode::encoderTicksCallback(
     return;
   }
 
-  // STK is signed body-frame tick: +forward, -reverse
-  const int64_t stk_l = msg->data[0];
-  const int64_t stk_r = msg->data[1];
+  const double dt = (now_time - last_time_).seconds();
+  if (dt <= 0.0) {
+    return;
+  }
 
-  const double meters_per_tick =
-    (2.0 * M_PI * wheel_radius_) / static_cast<double>(ticks_per_rev_);
+  const double left_delta_ticks = static_cast<double>(msg->data[0]) * left_tick_sign_;
+  const double right_delta_ticks = static_cast<double>(msg->data[1]) * right_tick_sign_;
 
-  const double dist_l = static_cast<double>(stk_l) * meters_per_tick;
-  const double dist_r = static_cast<double>(stk_r) * meters_per_tick;
+  const double meters_per_tick = (2.0 * M_PI * wheel_radius_) / ticks_per_revolution_;
+  const double left_distance = left_delta_ticks * meters_per_tick;
+  const double right_distance = right_delta_ticks * meters_per_tick;
 
-  const double dist   = 0.5 * (dist_l + dist_r);
-  const double dtheta = (dist_r - dist_l) / wheel_separation_;
+  const double delta_s = (right_distance + left_distance) * 0.5;
+  const double delta_theta = (right_distance - left_distance) / wheel_separation_;
 
-  x_   += dist * std::cos(yaw_ + dtheta * 0.5);
-  y_   += dist * std::sin(yaw_ + dtheta * 0.5);
-  yaw_ += dtheta;
+  x_ += delta_s * std::cos(yaw_ + delta_theta * 0.5);
+  y_ += delta_s * std::sin(yaw_ + delta_theta * 0.5);
+  yaw_ += delta_theta;
 
-  double dt = (now_time - last_time_).seconds();
-  if (dt <= 0.0) dt = 1e-3;
-
-  const double linear_vel  = dist   / dt;
-  const double angular_vel = dtheta / dt;
+  const double linear_vel = delta_s / dt;
+  const double angular_vel = delta_theta / dt;
 
   publishOdometry(now_time, linear_vel, angular_vel);
   if (publish_tf_) {
@@ -79,10 +77,6 @@ void EncoderOdomNode::encoderTicksCallback(
 
   last_time_ = now_time;
 }
-
-// ---------------------------------------------------------------------------
-// Publishers
-// ---------------------------------------------------------------------------
 
 void EncoderOdomNode::publishOdometry(
   const rclcpp::Time & stamp, double linear_vel, double angular_vel)
