@@ -230,13 +230,12 @@ void MotorBridgeNode::handleIncomingLine(const std::string & line)
   raw_msg.data = line;
   raw_pub_->publish(raw_msg);
 
-  if (line.rfind("RPM:", 0) == 0) {
-    float rpm_l, rpm_r;
-    int32_t stk_l, stk_r;
-    uint32_t tot_l, tot_r;
+  if (line.rfind("ENC:", 0) == 0) {
+    int64_t left_delta_ticks, right_delta_ticks;
+    float left_rpm, right_rpm;
 
-    if (parseFeedbackLine(line, rpm_l, rpm_r, stk_l, stk_r, tot_l, tot_r)) {
-      publishFeedback(rpm_l, rpm_r, stk_l, stk_r, tot_l, tot_r);
+    if (parseEncoderLine(line, left_delta_ticks, right_delta_ticks, left_rpm, right_rpm)) {
+      publishFeedback(left_delta_ticks, right_delta_ticks, left_rpm, right_rpm);
       last_feedback_time_ = now();
     } else {
       RCLCPP_WARN(get_logger(), "Failed to parse feedback: %s", line.c_str());
@@ -254,44 +253,46 @@ void MotorBridgeNode::handleIncomingLine(const std::string & line)
 // Feedback parsing and publishing
 // ---------------------------------------------------------------------------
 
-bool MotorBridgeNode::parseFeedbackLine(
+bool MotorBridgeNode::parseEncoderLine(
   const std::string & line,
-  float & rpm_l, float & rpm_r,
-  int32_t & stk_l, int32_t & stk_r,
-  uint32_t & tot_l, uint32_t & tot_r)
+  int64_t & left_delta_ticks, int64_t & right_delta_ticks,
+  float & left_rpm, float & right_rpm)
 {
-  float mot_l, mot_r, dist_l, dist_r;
+  long long parsed_left_ticks = 0;
+  long long parsed_right_ticks = 0;
 
   const int n = std::sscanf(
     line.c_str(),
-    "RPM:%f,%f MOT:%f,%f STK:%ld,%ld TOT:%lu,%lu DIST:%f,%f",
-    &rpm_l, &rpm_r,
-    &mot_l, &mot_r,
-    &stk_l, &stk_r,
-    &tot_l, &tot_r,
-    &dist_l, &dist_r);
+    "ENC:%lld,%lld,%f,%f",
+    &parsed_left_ticks,
+    &parsed_right_ticks,
+    &left_rpm,
+    &right_rpm);
 
-  return n == 10;
+  if (n != 4) {
+    return false;
+  }
+
+  left_delta_ticks = static_cast<int64_t>(parsed_left_ticks);
+  right_delta_ticks = static_cast<int64_t>(parsed_right_ticks);
+  return true;
 }
 
 void MotorBridgeNode::publishFeedback(
-  float rpm_l, float rpm_r,
-  int32_t stk_l, int32_t stk_r,
-  uint32_t tot_l, uint32_t tot_r)
+  int64_t left_delta_ticks, int64_t right_delta_ticks,
+  float left_rpm, float right_rpm)
 {
-  current_rpm_left_  = rpm_l;
-  current_rpm_right_ = rpm_r;
+  current_rpm_left_ = left_rpm;
+  current_rpm_right_ = right_rpm;
 
   std_msgs::msg::Float32MultiArray wheel_msg;
-  wheel_msg.data = {rpm_l, rpm_r};
+  wheel_msg.data = {left_rpm, right_rpm};
   wheel_state_pub_->publish(wheel_msg);
 
   std_msgs::msg::Int64MultiArray tick_msg;
   tick_msg.data = {
-    static_cast<int64_t>(stk_l),
-    static_cast<int64_t>(stk_r),
-    static_cast<int64_t>(tot_l),
-    static_cast<int64_t>(tot_r)
+    left_delta_ticks,
+    right_delta_ticks
   };
   encoder_ticks_pub_->publish(tick_msg);
 }

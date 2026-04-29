@@ -28,13 +28,17 @@ private:
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
   std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
 
-  double wheel_radius_;
-  double wheel_separation_;
-  int    ticks_per_rev_;
-  bool   publish_tf_;
-
+  std::string encoder_ticks_topic_;
+  std::string odom_topic_;
   std::string odom_frame_;
   std::string base_frame_;
+
+  double wheel_radius_;
+  double wheel_separation_;
+  double ticks_per_revolution_;
+  double left_tick_sign_;
+  double right_tick_sign_;
+  bool   publish_tf_;
 
   double x_;
   double y_;
