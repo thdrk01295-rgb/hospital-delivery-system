@@ -39,17 +39,17 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'publish_static_tf',
-            default_value='true',
+            default_value='false',
             description='Publish temporary static TFs for ToF sensor frames',
         ),
         DeclareLaunchArgument(
             'front_left_yaw',
-            default_value='0.436332',
+            default_value='2.007128',
             description='Front-left ToF yaw relative to base_link in radians',
         ),
         DeclareLaunchArgument(
             'front_right_yaw',
-            default_value='-0.436332',
+            default_value='-2.007128',
             description='Front-right ToF yaw relative to base_link in radians',
         ),
         DeclareLaunchArgument(

@@ -25,12 +25,12 @@
   <xacro:property name="tof_front_left_x" value="0.22"/>
   <xacro:property name="tof_front_left_y" value="0.32"/>
   <xacro:property name="tof_front_left_z" value="0.15"/>
-  <xacro:property name="tof_front_left_yaw" value="0.436332"/>
+  <xacro:property name="tof_front_left_yaw" value="2.007128"/>
 
   <xacro:property name="tof_front_right_x" value="0.22"/>
   <xacro:property name="tof_front_right_y" value="-0.32"/>
   <xacro:property name="tof_front_right_z" value="0.15"/>
-  <xacro:property name="tof_front_right_yaw" value="-0.436332"/>
+  <xacro:property name="tof_front_right_yaw" value="-2.007128"/>
 
   <xacro:property name="tof_rear_left_x" value="-0.55"/>
   <xacro:property name="tof_rear_left_y" value="0.28"/>

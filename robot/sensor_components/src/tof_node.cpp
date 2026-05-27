@@ -11,6 +11,7 @@
 #include <cstring>
 #include <fstream>
 #include <memory>
+#include <limits>
 #include <string>
 #include <thread>
 #include <utility>
@@ -33,6 +34,66 @@ constexpr uint8_t kModelIdReg = 0xC0;
 constexpr uint8_t kExpectedModelId = 0xEE;
 constexpr double kMinPublishRate = 1.0;
 constexpr double kMaxPublishRate = 100.0;
+constexpr double kDefaultMaxRange = 1.2;
+
+enum class RangeReadStatus
+{
+  kOk,
+  kNotReady,
+  kI2cError,
+  kTimeout,
+  kSignalFail,
+  kPhaseFail,
+  kMinRangeFail,
+  kHardwareFail,
+  kUnknownFailure,
+};
+
+const char * statusToString(RangeReadStatus status)
+{
+  switch (status) {
+    case RangeReadStatus::kOk:
+      return "ok";
+    case RangeReadStatus::kNotReady:
+      return "not ready";
+    case RangeReadStatus::kI2cError:
+      return "i2c error";
+    case RangeReadStatus::kTimeout:
+      return "timeout";
+    case RangeReadStatus::kSignalFail:
+      return "signal fail";
+    case RangeReadStatus::kPhaseFail:
+      return "phase fail";
+    case RangeReadStatus::kMinRangeFail:
+      return "min range fail";
+    case RangeReadStatus::kHardwareFail:
+      return "hardware fail";
+    case RangeReadStatus::kUnknownFailure:
+      return "unknown range status";
+  }
+  return "unknown";
+}
+
+RangeReadStatus decodeRangeStatus(uint8_t range_status)
+{
+  const uint8_t status = (range_status & 0x78) >> 3;
+  switch (status) {
+    case 0:
+      return RangeReadStatus::kOk;
+    case 1:
+      return RangeReadStatus::kSignalFail;
+    case 2:
+      return RangeReadStatus::kSignalFail;
+    case 3:
+      return RangeReadStatus::kMinRangeFail;
+    case 4:
+      return RangeReadStatus::kPhaseFail;
+    case 5:
+      return RangeReadStatus::kHardwareFail;
+    default:
+      return RangeReadStatus::kUnknownFailure;
+  }
+}
 
 bool writeTextFile(const std::string & path, const std::string & value)
 {
@@ -150,30 +211,38 @@ public:
     return true;
   }
 
-  bool readRangeMeters(double & range_m)
+  RangeReadStatus readRangeMeters(double & range_m)
   {
     if (!ready_) {
-      return false;
+      return RangeReadStatus::kNotReady;
     }
 
-    uint8_t status = 0;
+    uint8_t interrupt_status = 0;
     for (int i = 0; i < 10; ++i) {
-      if (!readRegister(kResultInterruptStatusReg, status)) {
-        return false;
+      if (!readRegister(kResultInterruptStatusReg, interrupt_status)) {
+        return RangeReadStatus::kI2cError;
       }
-      if ((status & 0x07) != 0) {
+      if ((interrupt_status & 0x07) != 0) {
+        uint8_t range_status = 0;
         uint16_t range_mm = 0;
-        if (!readRegister16(kResultRangeStatusReg + 10, range_mm)) {
-          return false;
+        if (!readRegister(kResultRangeStatusReg, range_status) ||
+          !readRegister16(kResultRangeStatusReg + 10, range_mm))
+        {
+          writeRegister(kSystemInterruptClearReg, 0x01);
+          return RangeReadStatus::kI2cError;
         }
         writeRegister(kSystemInterruptClearReg, 0x01);
+        const auto decoded_status = decodeRangeStatus(range_status);
+        if (decoded_status != RangeReadStatus::kOk) {
+          return decoded_status;
+        }
         range_m = static_cast<double>(range_mm) / 1000.0;
-        return true;
+        return RangeReadStatus::kOk;
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
 
-    return false;
+    return RangeReadStatus::kTimeout;
   }
 
 private:
@@ -275,7 +344,7 @@ public:
     i2c_bus_(declare_parameter<int>("i2c_bus", 1)),
     publish_rate_(declare_parameter<double>("publish_rate", 20.0)),
     min_range_(declare_parameter<double>("min_range", 0.03)),
-    max_range_(declare_parameter<double>("max_range", 2.0)),
+    max_range_(declare_parameter<double>("max_range", kDefaultMaxRange)),
     field_of_view_(declare_parameter<double>("field_of_view", 0.436))
   {
     publish_rate_ = std::clamp(publish_rate_, kMinPublishRate, kMaxPublishRate);
@@ -361,23 +430,70 @@ private:
 
     for (std::size_t i = 0; i < sensors_.size(); ++i) {
       double range = 0.0;
-      if (!sensors_[i]->readRangeMeters(range)) {
-        RCLCPP_ERROR_THROTTLE(
-          get_logger(), *get_clock(), 5000, "Failed to read ToF sensor %s",
-          sensors_[i]->config().name.c_str());
+      const auto status = sensors_[i]->readRangeMeters(range);
+      auto msg = makeRangeMessage(stamp, sensors_[i]->config().frame_id);
+
+      if (status != RangeReadStatus::kOk) {
+        msg.range = invalidRangeForStatus(status);
+        RCLCPP_WARN_THROTTLE(
+          get_logger(), *get_clock(), 5000, "Invalid ToF reading from %s: %s",
+          sensors_[i]->config().name.c_str(), statusToString(status));
+        publishers_[i]->publish(msg);
         continue;
       }
 
-      sensor_msgs::msg::Range msg;
-      msg.header.stamp = stamp;
-      msg.header.frame_id = sensors_[i]->config().frame_id;
-      msg.radiation_type = sensor_msgs::msg::Range::INFRARED;
-      msg.field_of_view = static_cast<float>(field_of_view_);
-      msg.min_range = static_cast<float>(min_range_);
-      msg.max_range = static_cast<float>(max_range_);
+      if (range <= 0.0) {
+        msg.range = -std::numeric_limits<float>::infinity();
+        RCLCPP_WARN_THROTTLE(
+          get_logger(), *get_clock(), 5000, "Invalid ToF reading from %s: non-positive range %.3f m",
+          sensors_[i]->config().name.c_str(), range);
+        publishers_[i]->publish(msg);
+        continue;
+      }
+
+      if (range < min_range_) {
+        msg.range = -std::numeric_limits<float>::infinity();
+        RCLCPP_WARN_THROTTLE(
+          get_logger(), *get_clock(), 5000, "Invalid ToF reading from %s: below min range %.3f m",
+          sensors_[i]->config().name.c_str(), range);
+        publishers_[i]->publish(msg);
+        continue;
+      }
+
+      if (range > max_range_) {
+        msg.range = std::numeric_limits<float>::infinity();
+        RCLCPP_WARN_THROTTLE(
+          get_logger(), *get_clock(), 5000, "Invalid ToF reading from %s: above max range %.3f m",
+          sensors_[i]->config().name.c_str(), range);
+        publishers_[i]->publish(msg);
+        continue;
+      }
+
       msg.range = static_cast<float>(range);
       publishers_[i]->publish(msg);
     }
+  }
+
+  sensor_msgs::msg::Range makeRangeMessage(
+    const rclcpp::Time & stamp,
+    const std::string & frame_id) const
+  {
+    sensor_msgs::msg::Range msg;
+    msg.header.stamp = stamp;
+    msg.header.frame_id = frame_id;
+    msg.radiation_type = sensor_msgs::msg::Range::INFRARED;
+    msg.field_of_view = static_cast<float>(field_of_view_);
+    msg.min_range = static_cast<float>(min_range_);
+    msg.max_range = static_cast<float>(max_range_);
+    return msg;
+  }
+
+  float invalidRangeForStatus(RangeReadStatus status) const
+  {
+    if (status == RangeReadStatus::kMinRangeFail) {
+      return -std::numeric_limits<float>::infinity();
+    }
+    return std::numeric_limits<float>::infinity();
   }
 
   int defaultXshut(const std::string & name) const

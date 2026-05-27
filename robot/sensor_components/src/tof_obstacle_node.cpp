@@ -17,6 +17,7 @@ namespace
 {
 constexpr double kMinPublishRate = 1.0;
 constexpr double kMaxPublishRate = 100.0;
+constexpr double kDefaultMaxValidRange = 1.2;
 
 rclcpp::Time messageTimeOrNow(const sensor_msgs::msg::Range & msg, const rclcpp::Time & now)
 {
@@ -34,7 +35,7 @@ TofObstacleNode::TofObstacleNode()
   publish_rate_(declare_parameter<double>("publish_rate", 20.0)),
   timeout_sec_(declare_parameter<double>("timeout_sec", 0.2)),
   min_valid_range_(declare_parameter<double>("min_valid_range", 0.03)),
-  max_valid_range_(declare_parameter<double>("max_valid_range", 2.0))
+  max_valid_range_(declare_parameter<double>("max_valid_range", kDefaultMaxValidRange))
 {
   publish_rate_ = std::clamp(publish_rate_, kMinPublishRate, kMaxPublishRate);
   timeout_sec_ = std::max(0.0, timeout_sec_);
