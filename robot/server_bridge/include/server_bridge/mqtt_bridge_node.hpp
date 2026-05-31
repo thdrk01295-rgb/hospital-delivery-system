@@ -3,10 +3,10 @@
 
 #include <memory>
 #include <string>
+#include <nlohmann/json.hpp>
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/string.hpp"
 #include "std_msgs/msg/float32.hpp"
-#include "std_msgs/msg/int32.hpp"
 #include "server_bridge/mqtt_client.hpp"
 
 namespace server_bridge
@@ -29,7 +29,8 @@ private:
   void onLocationCode(const std_msgs::msg::String::SharedPtr msg);
   void onBatteryState(const std_msgs::msg::Float32::SharedPtr msg);
   void onErrorEvent(const std_msgs::msg::String::SharedPtr msg);
-  void onTaskCompleteEvent(const std_msgs::msg::Int32::SharedPtr msg);
+  void onTaskCompleteEvent(const std_msgs::msg::String::SharedPtr msg);
+  bool publishMqtt(const std::string & topic, const nlohmann::json & payload);
 
   std::string robot_id_;
   std::string broker_uri_;
@@ -45,7 +46,7 @@ private:
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr  sub_location_code_;
   rclcpp::Subscription<std_msgs::msg::Float32>::SharedPtr sub_battery_state_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr  sub_error_event_;
-  rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr   sub_task_complete_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr  sub_task_complete_;
 };
 
 }  // namespace server_bridge

@@ -1,5 +1,6 @@
 #include "server_bridge/mqtt_bridge_node.hpp"
 #include <nlohmann/json.hpp>
+#include <string>
 
 using json = nlohmann::json;
 
@@ -17,6 +18,83 @@ constexpr char BATTERY[]        = "robot/battery";
 constexpr char ERROR[]          = "robot/error";
 constexpr char TASK_COMPLETE[]  = "robot/task_complete";
 }  // namespace topic
+
+namespace
+{
+
+std::string payloadPreview(const std::string & payload)
+{
+  constexpr size_t kMaxPreview = 160;
+  if (payload.size() <= kMaxPreview) {
+    return payload;
+  }
+  return payload.substr(0, kMaxPreview) + "...";
+}
+
+bool parseJsonObject(
+  const rclcpp::Logger & logger,
+  const std::string & source,
+  const std::string & payload,
+  json & out)
+{
+  try {
+    out = json::parse(payload);
+  } catch (const json::exception & e) {
+    RCLCPP_ERROR(
+      logger,
+      "%s payload JSON parse failed: %s payload='%s'",
+      source.c_str(), e.what(), payloadPreview(payload).c_str());
+    return false;
+  }
+
+  if (!out.is_object()) {
+    RCLCPP_ERROR(
+      logger,
+      "%s payload must be a JSON object: payload='%s'",
+      source.c_str(), payloadPreview(payload).c_str());
+    return false;
+  }
+  return true;
+}
+
+void copyTaskIdIfPresent(const json & src, json & dst)
+{
+  if (src.contains("task_id") && !src["task_id"].is_null()) {
+    dst["task_id"] = src["task_id"];
+  }
+}
+
+bool matchesRobotId(
+  const rclcpp::Logger & logger,
+  const std::string & topic_name,
+  const json & payload,
+  const std::string & robot_id)
+{
+  if (!payload.contains("robot_id") || payload["robot_id"].is_null()) {
+    RCLCPP_WARN(
+      logger,
+      "%s payload has no robot_id; allowing for smoke test",
+      topic_name.c_str());
+    return true;
+  }
+
+  if (!payload["robot_id"].is_string()) {
+    RCLCPP_ERROR(logger, "%s payload robot_id must be a string", topic_name.c_str());
+    return false;
+  }
+
+  const auto incoming_robot_id = payload["robot_id"].get<std::string>();
+  if (incoming_robot_id != robot_id) {
+    RCLCPP_WARN(
+      logger,
+      "%s payload ignored for robot_id='%s' expected='%s'",
+      topic_name.c_str(), incoming_robot_id.c_str(), robot_id.c_str());
+    return false;
+  }
+  return true;
+}
+
+}  // namespace
 
 MqttBridgeNode::MqttBridgeNode(const rclcpp::NodeOptions & options)
 : Node("mqtt_bridge_node", options)
@@ -52,11 +130,14 @@ void MqttBridgeNode::initMqtt()
     [this](const std::string & t, const std::string & p) {onMqttMessage(t, p);});
 
   mqtt_client_->setConnectionCallback(
-    [this](bool ok) {
+    [this](bool ok, const std::string & detail) {
       if (ok) {
-        RCLCPP_INFO(get_logger(), "MQTT connected");
+        RCLCPP_INFO(get_logger(), "MQTT connected; subscriptions refreshed");
       } else {
-        RCLCPP_WARN(get_logger(), "MQTT connection lost");
+        RCLCPP_WARN(
+          get_logger(),
+          "MQTT connection lost: %s; automatic reconnect is enabled",
+          detail.empty() ? "unknown" : detail.c_str());
       }
     });
 
@@ -93,13 +174,29 @@ void MqttBridgeNode::initRos()
     "/robot/error_event", qos,
     [this](const std_msgs::msg::String::SharedPtr m) {onErrorEvent(m);});
 
-  sub_task_complete_ = create_subscription<std_msgs::msg::Int32>(
+  sub_task_complete_ = create_subscription<std_msgs::msg::String>(
     "/robot/task_complete_event", qos,
-    [this](const std_msgs::msg::Int32::SharedPtr m) {onTaskCompleteEvent(m);});
+    [this](const std_msgs::msg::String::SharedPtr m) {onTaskCompleteEvent(m);});
 }
 
 void MqttBridgeNode::onMqttMessage(const std::string & t, const std::string & payload)
 {
+  json parsed;
+  if (!parseJsonObject(get_logger(), t, payload, parsed)) {
+    return;
+  }
+
+  if (!matchesRobotId(get_logger(), t, parsed, robot_id_)) {
+    return;
+  }
+
+  if (t == topic::TASK_ASSIGN &&
+    (!parsed.contains("task_id") || parsed["task_id"].is_null()))
+  {
+    RCLCPP_ERROR(get_logger(), "%s payload missing required task_id", t.c_str());
+    return;
+  }
+
   auto msg = std_msgs::msg::String();
   msg.data = payload;
 
@@ -113,51 +210,102 @@ void MqttBridgeNode::onMqttMessage(const std::string & t, const std::string & pa
   }
 }
 
-// timestamp는 ROS time(seconds)을 string으로 사용 — ISO8601 변환은 추후 개선 가능
 void MqttBridgeNode::onTaskState(const std_msgs::msg::String::SharedPtr msg)
 {
-  json j;
-  j["robot_id"]  = robot_id_;
-  j["state"]     = msg->data;
-  j["timestamp"] = std::to_string(now().seconds());
-  mqtt_client_->publish(topic::STATUS, j.dump());
+  json in;
+  if (!parseJsonObject(get_logger(), "/robot/task_state", msg->data, in)) {
+    return;
+  }
+  if (!in.contains("state") || !in["state"].is_string()) {
+    RCLCPP_ERROR(get_logger(), "/robot/task_state JSON missing string field 'state'");
+    return;
+  }
+
+  json out;
+  out["robot_id"] = robot_id_;
+  out["state"] = in["state"];
+  copyTaskIdIfPresent(in, out);
+  publishMqtt(topic::STATUS, out);
 }
 
 void MqttBridgeNode::onLocationCode(const std_msgs::msg::String::SharedPtr msg)
 {
-  json j;
-  j["robot_id"]      = robot_id_;
-  j["location_code"] = msg->data;
-  j["timestamp"]     = std::to_string(now().seconds());
-  mqtt_client_->publish(topic::LOCATION, j.dump());
+  json in;
+  if (!parseJsonObject(get_logger(), "/robot/location_code", msg->data, in)) {
+    return;
+  }
+  if (!in.contains("location_code") || !in["location_code"].is_string()) {
+    RCLCPP_ERROR(get_logger(), "/robot/location_code JSON missing string field 'location_code'");
+    return;
+  }
+
+  json out;
+  out["robot_id"] = robot_id_;
+  out["location_code"] = in["location_code"];
+  copyTaskIdIfPresent(in, out);
+  publishMqtt(topic::LOCATION, out);
 }
 
 void MqttBridgeNode::onBatteryState(const std_msgs::msg::Float32::SharedPtr msg)
 {
-  json j;
-  j["robot_id"]        = robot_id_;
-  j["battery_percent"] = msg->data;
-  j["timestamp"]       = std::to_string(now().seconds());
-  mqtt_client_->publish(topic::BATTERY, j.dump());
+  json out;
+  out["robot_id"] = robot_id_;
+  out["battery_percent"] = msg->data;
+  publishMqtt(topic::BATTERY, out);
 }
 
 void MqttBridgeNode::onErrorEvent(const std_msgs::msg::String::SharedPtr msg)
 {
-  json j;
-  j["robot_id"]      = robot_id_;
-  j["error_message"] = msg->data;
-  j["timestamp"]     = std::to_string(now().seconds());
-  mqtt_client_->publish(topic::ERROR, j.dump());
-  RCLCPP_ERROR(get_logger(), "Error published: %s", msg->data.c_str());
+  json in;
+  if (!parseJsonObject(get_logger(), "/robot/error_event", msg->data, in)) {
+    return;
+  }
+
+  json out;
+  out["robot_id"] = robot_id_;
+  if (in.contains("error") && in["error"].is_string()) {
+    out["error"] = in["error"];
+  } else if (in.contains("error_message") && in["error_message"].is_string()) {
+    out["error"] = in["error_message"];
+  } else {
+    RCLCPP_ERROR(get_logger(), "/robot/error_event JSON missing string field 'error'");
+    return;
+  }
+  copyTaskIdIfPresent(in, out);
+
+  publishMqtt(topic::ERROR, out);
+  RCLCPP_ERROR(get_logger(), "Error event bridged to MQTT: %s", out["error"].get<std::string>().c_str());
 }
 
-void MqttBridgeNode::onTaskCompleteEvent(const std_msgs::msg::Int32::SharedPtr msg)
+void MqttBridgeNode::onTaskCompleteEvent(const std_msgs::msg::String::SharedPtr msg)
 {
-  json j;
-  j["robot_id"]  = robot_id_;
-  j["task_id"]   = msg->data;
-  j["timestamp"] = std::to_string(now().seconds());
-  mqtt_client_->publish(topic::TASK_COMPLETE, j.dump());
+  json in;
+  if (!parseJsonObject(get_logger(), "/robot/task_complete_event", msg->data, in)) {
+    return;
+  }
+  if (!in.contains("task_id") || in["task_id"].is_null()) {
+    RCLCPP_ERROR(get_logger(), "/robot/task_complete_event JSON missing required task_id");
+    return;
+  }
+
+  json out;
+  out["robot_id"] = robot_id_;
+  out["task_id"] = in["task_id"];
+  publishMqtt(topic::TASK_COMPLETE, out);
+}
+
+bool MqttBridgeNode::publishMqtt(const std::string & topic_name, const json & payload)
+{
+  const auto dumped = payload.dump();
+  if (mqtt_client_->publish(topic_name, dumped)) {
+    return true;
+  }
+
+  RCLCPP_ERROR(
+    get_logger(),
+    "MQTT publish failed topic='%s' payload='%s'",
+    topic_name.c_str(), payloadPreview(dumped).c_str());
+  return false;
 }
 
 }  // namespace server_bridge

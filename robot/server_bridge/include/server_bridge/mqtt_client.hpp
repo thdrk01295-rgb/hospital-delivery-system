@@ -2,6 +2,7 @@
 #define SERVER_BRIDGE__MQTT_CLIENT_HPP_
 
 #include <functional>
+#include <mutex>
 #include <string>
 #include <vector>
 #include "MQTTAsync.h"
@@ -13,7 +14,7 @@ class MqttClient
 {
 public:
   using MessageCallback    = std::function<void(const std::string &, const std::string &)>;
-  using ConnectionCallback = std::function<void(bool)>;
+  using ConnectionCallback = std::function<void(bool, const std::string &)>;
 
   MqttClient(const std::string & broker_uri, const std::string & client_id, int qos = 1);
   ~MqttClient();
@@ -29,7 +30,11 @@ public:
   bool subscribe(const std::string & topic);
   bool publish(const std::string & topic, const std::string & payload);
 
-  bool isConnected() const { return connected_; }
+  bool isConnected() const
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return connected_;
+  }
 
 private:
   static void onConnected(void * ctx, char * cause);
@@ -41,6 +46,7 @@ private:
   void handleConnected();
   void handleConnectionLost(const std::string & cause);
   void handleMessage(const std::string & topic, const std::string & payload);
+  bool subscribeLocked(const std::string & topic);
 
   std::string broker_uri_;
   std::string client_id_;
@@ -48,10 +54,11 @@ private:
 
   MQTTAsync client_{nullptr};
   bool connected_{false};
+  mutable std::mutex mutex_;
 
   MessageCallback    message_cb_;
   ConnectionCallback connection_cb_;
-  std::vector<std::string> pending_subs_;
+  std::vector<std::string> subscribed_topics_;
 };
 
 }  // namespace server_bridge
