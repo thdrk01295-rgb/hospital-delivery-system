@@ -11,9 +11,9 @@ namespace topic
 {
 constexpr char TASK_ASSIGN[]    = "server/task_assign";
 constexpr char TASK_CANCEL[]    = "server/task_cancel";
+constexpr char TASK_FINISH[]    = "server/task_finish";
 constexpr char EMERGENCY_CALL[] = "server/emergency_call";
 constexpr char STATUS[]         = "robot/status";
-constexpr char LOCATION[]       = "robot/location";
 constexpr char BATTERY[]        = "robot/battery";
 constexpr char ERROR[]          = "robot/error";
 constexpr char TASK_COMPLETE[]  = "robot/task_complete";
@@ -40,7 +40,7 @@ bool parseJsonObject(
   try {
     out = json::parse(payload);
   } catch (const json::exception & e) {
-    RCLCPP_ERROR(
+    RCLCPP_WARN(
       logger,
       "%s payload JSON parse failed: %s payload='%s'",
       source.c_str(), e.what(), payloadPreview(payload).c_str());
@@ -48,7 +48,7 @@ bool parseJsonObject(
   }
 
   if (!out.is_object()) {
-    RCLCPP_ERROR(
+    RCLCPP_WARN(
       logger,
       "%s payload must be a JSON object: payload='%s'",
       source.c_str(), payloadPreview(payload).c_str());
@@ -57,11 +57,78 @@ bool parseJsonObject(
   return true;
 }
 
-void copyTaskIdIfPresent(const json & src, json & dst)
+bool isInteger(const json & value)
 {
-  if (src.contains("task_id") && !src["task_id"].is_null()) {
-    dst["task_id"] = src["task_id"];
+  return value.is_number_integer() || value.is_number_unsigned();
+}
+
+bool copyIntegerTaskIdIfPresent(
+  const rclcpp::Logger & logger,
+  const std::string & source,
+  const json & src,
+  json & dst)
+{
+  if (!src.contains("task_id") || src["task_id"].is_null()) {
+    return true;
   }
+
+  if (!isInteger(src["task_id"])) {
+    RCLCPP_ERROR(logger, "%s payload task_id must be an integer", source.c_str());
+    return false;
+  }
+
+  dst["task_id"] = src["task_id"];
+  return true;
+}
+
+bool requireIntegerField(
+  const rclcpp::Logger & logger,
+  const std::string & source,
+  const json & payload,
+  const char * field)
+{
+  if (!payload.contains(field) || payload[field].is_null()) {
+    RCLCPP_ERROR(logger, "%s payload missing required %s", source.c_str(), field);
+    return false;
+  }
+  if (!isInteger(payload[field])) {
+    RCLCPP_ERROR(logger, "%s payload %s must be an integer", source.c_str(), field);
+    return false;
+  }
+  return true;
+}
+
+bool requireStringField(
+  const rclcpp::Logger & logger,
+  const std::string & source,
+  const json & payload,
+  const char * field)
+{
+  if (!payload.contains(field) || payload[field].is_null()) {
+    RCLCPP_ERROR(logger, "%s payload missing required %s", source.c_str(), field);
+    return false;
+  }
+  if (!payload[field].is_string()) {
+    RCLCPP_ERROR(logger, "%s payload %s must be a string", source.c_str(), field);
+    return false;
+  }
+  return true;
+}
+
+bool requireNonEmptyStringField(
+  const rclcpp::Logger & logger,
+  const std::string & source,
+  const json & payload,
+  const char * field)
+{
+  if (!requireStringField(logger, source, payload, field)) {
+    return false;
+  }
+  if (payload[field].get<std::string>().empty()) {
+    RCLCPP_ERROR(logger, "%s payload %s must not be empty", source.c_str(), field);
+    return false;
+  }
+  return true;
 }
 
 bool matchesRobotId(
@@ -71,11 +138,8 @@ bool matchesRobotId(
   const std::string & robot_id)
 {
   if (!payload.contains("robot_id") || payload["robot_id"].is_null()) {
-    RCLCPP_WARN(
-      logger,
-      "%s payload has no robot_id; allowing for smoke test",
-      topic_name.c_str());
-    return true;
+    RCLCPP_ERROR(logger, "%s payload missing required robot_id", topic_name.c_str());
+    return false;
   }
 
   if (!payload["robot_id"].is_string()) {
@@ -143,6 +207,7 @@ void MqttBridgeNode::initMqtt()
 
   mqtt_client_->subscribe(topic::TASK_ASSIGN);
   mqtt_client_->subscribe(topic::TASK_CANCEL);
+  mqtt_client_->subscribe(topic::TASK_FINISH);
   mqtt_client_->subscribe(topic::EMERGENCY_CALL);
 
   if (!mqtt_client_->connect(10)) {
@@ -156,15 +221,12 @@ void MqttBridgeNode::initRos()
 
   pub_task_assign_    = create_publisher<std_msgs::msg::String>("/server/task_assign",    qos);
   pub_task_cancel_    = create_publisher<std_msgs::msg::String>("/server/task_cancel",    qos);
+  pub_task_finish_    = create_publisher<std_msgs::msg::String>("/server/task_finish",    qos);
   pub_emergency_call_ = create_publisher<std_msgs::msg::String>("/server/emergency_call", qos);
 
   sub_task_state_ = create_subscription<std_msgs::msg::String>(
     "/robot/task_state", qos,
     [this](const std_msgs::msg::String::SharedPtr m) {onTaskState(m);});
-
-  sub_location_code_ = create_subscription<std_msgs::msg::String>(
-    "/robot/location_code", qos,
-    [this](const std_msgs::msg::String::SharedPtr m) {onLocationCode(m);});
 
   sub_battery_state_ = create_subscription<std_msgs::msg::Float32>(
     "/robot/battery_state", qos,
@@ -190,11 +252,28 @@ void MqttBridgeNode::onMqttMessage(const std::string & t, const std::string & pa
     return;
   }
 
-  if (t == topic::TASK_ASSIGN &&
-    (!parsed.contains("task_id") || parsed["task_id"].is_null()))
-  {
-    RCLCPP_ERROR(get_logger(), "%s payload missing required task_id", t.c_str());
-    return;
+  if (t == topic::TASK_ASSIGN) {
+    if (!requireIntegerField(get_logger(), t, parsed, "task_id") ||
+      !requireStringField(get_logger(), t, parsed, "task_type") ||
+      !requireStringField(get_logger(), t, parsed, "origin") ||
+      !requireNonEmptyStringField(get_logger(), t, parsed, "destination") ||
+      !requireIntegerField(get_logger(), t, parsed, "priority"))
+    {
+      return;
+    }
+  } else if (t == topic::TASK_CANCEL || t == topic::TASK_FINISH) {
+    if (!requireIntegerField(get_logger(), t, parsed, "task_id")) {
+      return;
+    }
+  } else if (t == topic::EMERGENCY_CALL) {
+    if (!requireStringField(get_logger(), t, parsed, "command")) {
+      return;
+    }
+    const auto command = parsed["command"].get<std::string>();
+    if (command != "STOP" && command != "RELEASE") {
+      RCLCPP_ERROR(get_logger(), "%s payload command must be STOP or RELEASE", t.c_str());
+      return;
+    }
   }
 
   auto msg = std_msgs::msg::String();
@@ -204,6 +283,8 @@ void MqttBridgeNode::onMqttMessage(const std::string & t, const std::string & pa
     pub_task_assign_->publish(msg);
   } else if (t == topic::TASK_CANCEL) {
     pub_task_cancel_->publish(msg);
+  } else if (t == topic::TASK_FINISH) {
+    pub_task_finish_->publish(msg);
   } else if (t == topic::EMERGENCY_CALL) {
     pub_emergency_call_->publish(msg);
     RCLCPP_WARN(get_logger(), "Emergency call received");
@@ -224,26 +305,13 @@ void MqttBridgeNode::onTaskState(const std_msgs::msg::String::SharedPtr msg)
   json out;
   out["robot_id"] = robot_id_;
   out["state"] = in["state"];
-  copyTaskIdIfPresent(in, out);
+  if (!copyIntegerTaskIdIfPresent(get_logger(), "/robot/task_state", in, out)) {
+    return;
+  }
+  if (in.contains("timestamp") && !in["timestamp"].is_null()) {
+    out["timestamp"] = in["timestamp"];
+  }
   publishMqtt(topic::STATUS, out);
-}
-
-void MqttBridgeNode::onLocationCode(const std_msgs::msg::String::SharedPtr msg)
-{
-  json in;
-  if (!parseJsonObject(get_logger(), "/robot/location_code", msg->data, in)) {
-    return;
-  }
-  if (!in.contains("location_code") || !in["location_code"].is_string()) {
-    RCLCPP_ERROR(get_logger(), "/robot/location_code JSON missing string field 'location_code'");
-    return;
-  }
-
-  json out;
-  out["robot_id"] = robot_id_;
-  out["location_code"] = in["location_code"];
-  copyTaskIdIfPresent(in, out);
-  publishMqtt(topic::LOCATION, out);
 }
 
 void MqttBridgeNode::onBatteryState(const std_msgs::msg::Float32::SharedPtr msg)
@@ -264,17 +332,27 @@ void MqttBridgeNode::onErrorEvent(const std_msgs::msg::String::SharedPtr msg)
   json out;
   out["robot_id"] = robot_id_;
   if (in.contains("error") && in["error"].is_string()) {
-    out["error"] = in["error"];
+    out["error_message"] = in["error"];
   } else if (in.contains("error_message") && in["error_message"].is_string()) {
-    out["error"] = in["error_message"];
+    out["error_message"] = in["error_message"];
   } else {
-    RCLCPP_ERROR(get_logger(), "/robot/error_event JSON missing string field 'error'");
+    RCLCPP_ERROR(
+      get_logger(),
+      "/robot/error_event JSON missing string field 'error_message' or 'error'");
     return;
   }
-  copyTaskIdIfPresent(in, out);
+  if (!copyIntegerTaskIdIfPresent(get_logger(), "/robot/error_event", in, out)) {
+    return;
+  }
+  if (in.contains("timestamp") && !in["timestamp"].is_null()) {
+    out["timestamp"] = in["timestamp"];
+  }
 
   publishMqtt(topic::ERROR, out);
-  RCLCPP_ERROR(get_logger(), "Error event bridged to MQTT: %s", out["error"].get<std::string>().c_str());
+  RCLCPP_ERROR(
+    get_logger(),
+    "Error event bridged to MQTT: %s",
+    out["error_message"].get<std::string>().c_str());
 }
 
 void MqttBridgeNode::onTaskCompleteEvent(const std_msgs::msg::String::SharedPtr msg)
@@ -283,14 +361,16 @@ void MqttBridgeNode::onTaskCompleteEvent(const std_msgs::msg::String::SharedPtr 
   if (!parseJsonObject(get_logger(), "/robot/task_complete_event", msg->data, in)) {
     return;
   }
-  if (!in.contains("task_id") || in["task_id"].is_null()) {
-    RCLCPP_ERROR(get_logger(), "/robot/task_complete_event JSON missing required task_id");
+  if (!requireIntegerField(get_logger(), "/robot/task_complete_event", in, "task_id")) {
     return;
   }
 
   json out;
   out["robot_id"] = robot_id_;
   out["task_id"] = in["task_id"];
+  if (in.contains("timestamp") && !in["timestamp"].is_null()) {
+    out["timestamp"] = in["timestamp"];
+  }
   publishMqtt(topic::TASK_COMPLETE, out);
 }
 

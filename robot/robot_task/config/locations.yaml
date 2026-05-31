@@ -1,0 +1,48 @@
+# Hospital AMR — Location Code → Pose Map
+# Format: location_code → {x, y, yaw}
+# yaw is in radians
+#
+# location_code must EXACTLY match the string sent by the server
+# (see mqtt_integration_spec.md §4)
+
+locations:
+  STATION-01:
+    x: 1.2
+    y: 0.8
+    yaw: 0.0
+
+  LAUNDRY-01:
+    x: 5.0
+    y: 2.5
+    yaw: 1.57
+
+  SPECIMEN-LAB:
+    x: 7.5
+    y: 2.5
+    yaw: 1.57
+
+  # Bed codes: floor + room + bed  (e.g. "11011" = 1F room101 bed1)
+  "11011":
+    x: 12.4
+    y: 3.1
+    yaw: 1.57
+
+  "11012":
+    x: 12.4
+    y: 4.6
+    yaw: 1.57
+
+  "11021":
+    x: 14.0
+    y: 3.1
+    yaw: 1.57
+
+  "11022":
+    x: 14.0
+    y: 4.6
+    yaw: 1.57
+
+  "33045":
+    x: 18.0
+    y: 6.2
+    yaw: 3.14

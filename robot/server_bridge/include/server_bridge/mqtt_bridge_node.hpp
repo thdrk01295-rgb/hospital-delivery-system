@@ -26,7 +26,6 @@ private:
   void onMqttMessage(const std::string & topic, const std::string & payload);
 
   void onTaskState(const std_msgs::msg::String::SharedPtr msg);
-  void onLocationCode(const std_msgs::msg::String::SharedPtr msg);
   void onBatteryState(const std_msgs::msg::Float32::SharedPtr msg);
   void onErrorEvent(const std_msgs::msg::String::SharedPtr msg);
   void onTaskCompleteEvent(const std_msgs::msg::String::SharedPtr msg);
@@ -40,10 +39,10 @@ private:
 
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_task_assign_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_task_cancel_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_task_finish_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_emergency_call_;
 
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr  sub_task_state_;
-  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr  sub_location_code_;
   rclcpp::Subscription<std_msgs::msg::Float32>::SharedPtr sub_battery_state_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr  sub_error_event_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr  sub_task_complete_;
