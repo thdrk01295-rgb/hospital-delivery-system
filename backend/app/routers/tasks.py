@@ -15,7 +15,7 @@ from app.services.task_service import (
     create_emergency_task,
     update_task_status,
 )
-from app.services.abnormal_event_service import open_event
+from app.services.abnormal_event_service import open_event, resolve_all_by_type
 from app.services.auth_service import decode_token
 from app.constants.enums import TaskType, TaskStatus
 from app.constants import ws_events
@@ -61,7 +61,20 @@ async def trigger_emergency(
 
     task = create_emergency_task(db)
 
-    # Record an abnormal event for the emergency call
+    # Cancel only the currently active task (DISPATCHED or IN_PROGRESS)
+    from app.models.task import Task as TaskModel
+    active_task = (
+        db.query(TaskModel)
+        .filter(TaskModel.status.in_([TaskStatus.DISPATCHED, TaskStatus.IN_PROGRESS]))
+        .order_by(TaskModel.created_at.desc())
+        .first()
+    )
+    if active_task:
+        active_task = update_task_status(db, active_task.id, TaskStatus.CANCELLED)
+        cancelled_dict = TaskRead.model_validate(active_task).model_dump(mode="json")
+        await ws_manager.broadcast(ws_events.TASK_STATUS_UPDATE, cancelled_dict)
+
+    # Open abnormal event for the emergency call
     event = open_event(db, "emergency_call", related_task_id=task.id,
                        note="Emergency station call triggered by nurse")
     await ws_manager.broadcast(
@@ -69,7 +82,53 @@ async def trigger_emergency(
         {"event_type": "emergency_call", "event_id": event.id,
          "active": True, "related_task_id": task.id},
     )
+
+    # Notify robot: stop immediately
+    from app.mqtt.client import publish
+    from app.constants import mqtt_topics
+    publish(mqtt_topics.SERVER_EMERGENCY_CALL, {"robot_id": "AMR-001", "command": "STOP"})
+
     return task
+
+
+@router.post("/nurse/emergency/release", status_code=status.HTTP_200_OK)
+async def release_emergency(
+    authorization: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    """Nurse releases the robot from EMERGENCY state."""
+    payload = _get_token_payload(authorization)
+    if payload.get("role") != "nurse":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Nurses only")
+
+    # Notify robot: exit EMERGENCY, return to IDLE
+    from app.mqtt.client import publish
+    from app.constants import mqtt_topics
+    publish(mqtt_topics.SERVER_EMERGENCY_CALL, {"robot_id": "AMR-001", "command": "RELEASE"})
+
+    # Cancel any remaining PENDING emergency_call tasks so they don't dispatch
+    from app.models.task import Task as TaskModel
+    pending_emergency = (
+        db.query(TaskModel)
+        .filter(
+            TaskModel.task_type == TaskType.EMERGENCY_CALL,
+            TaskModel.status == TaskStatus.PENDING,
+        )
+        .all()
+    )
+    for et in pending_emergency:
+        et = update_task_status(db, et.id, TaskStatus.CANCELLED)
+        et_dict = TaskRead.model_validate(et).model_dump(mode="json")
+        await ws_manager.broadcast(ws_events.TASK_STATUS_UPDATE, et_dict)
+
+    # Resolve the open emergency_call abnormal event
+    resolve_all_by_type(db, "emergency_call")
+    await ws_manager.broadcast(
+        ws_events.ABNORMAL_EVENT_UPDATE,
+        {"event_type": "emergency_call", "active": False},
+    )
+
+    return {"status": "released"}
 
 
 # ── Patient endpoints ────────────────────────────────────────────────────────

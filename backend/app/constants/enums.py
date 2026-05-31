@@ -19,6 +19,7 @@ class RobotState(str, Enum):
     LOW_BATTERY = "LOW_BATTERY"
     CHAGING_BATTERY = "CHAGING_BATTERY"   # spec spelling preserved
     ERROR = "ERROR"
+    EMERGENCY = "EMERGENCY"               # externally triggered stop (nurse/admin); distinct from ERROR
 
 
 class LocationType(str, Enum):
@@ -78,6 +79,7 @@ TASK_PRIORITY: dict[str, int] = {
 # Robot states that block normal task dispatch
 BLOCKING_ROBOT_STATES: set[str] = {
     RobotState.ERROR,
+    RobotState.EMERGENCY,
     RobotState.LOW_BATTERY,
     RobotState.CHAGING_BATTERY,
     RobotState.MOVING,
