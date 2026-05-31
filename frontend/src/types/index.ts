@@ -11,7 +11,7 @@ export type RobotState =
   | 'DELIVERY_OPEN_PAT'
   | 'COMPLETE'
   | 'LOW_BATTERY'
-  | 'CHAGING_BATTERY'  // spec spelling preserved
+  | 'CHARGING_BATTERY'
   | 'ERROR'
 
 export interface RobotStatus {
@@ -200,4 +200,4 @@ export type PatientScreenMode =
   | 'ROBOT_ARRIVED'       // robot state = ARRIVED
   | 'DELIVERY_ACTION'     // robot state = DELIVERY_OPEN_PAT
   | 'COMPLETE'            // robot state = COMPLETE (auto-resets after 3s)
-  | 'ROBOT_STATUS'        // robot state = ERROR | LOW_BATTERY | CHAGING_BATTERY
+  | 'ROBOT_STATUS'        // robot state = ERROR | LOW_BATTERY | CHARGING_BATTERY

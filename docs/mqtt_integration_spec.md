@@ -303,14 +303,14 @@ Source: `backend/app/constants/enums.py`
 | `DELIVERY_OPEN_PAT` | Compartment open — patient interaction |
 | `COMPLETE` | Task cycle complete |
 | `LOW_BATTERY` | Battery low threshold crossed |
-| `CHAGING_BATTERY` | Charging (**note: intentional spec spelling**) |
+| `CHARGING_BATTERY` | Charging |
 | `ERROR` | Device self-reported error |
 | `EMERGENCY` | Externally triggered stop — distinct from ERROR |
 
 **States that block task dispatch** (server will not send `server/task_assign` while robot is in any of these):
 
 ```
-EMERGENCY, ERROR, LOW_BATTERY, CHAGING_BATTERY,
+EMERGENCY, ERROR, LOW_BATTERY, CHARGING_BATTERY,
 MOVING, ARRIVED, WAIT_NFC, AUTH_SUCCESS, AUTH_FAIL,
 DELIVERY_OPEN_NUR, DELIVERY_OPEN_PAT
 ```

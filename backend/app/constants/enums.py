@@ -6,7 +6,7 @@ from enum import Enum
 
 
 class RobotState(str, Enum):
-    """Official robot state values. Spelling is preserved from the project spec."""
+    """Official robot state values."""
     IDLE = "IDLE"
     MOVING = "MOVING"
     ARRIVED = "ARRIVED"
@@ -17,7 +17,7 @@ class RobotState(str, Enum):
     DELIVERY_OPEN_PAT = "DELIVERY_OPEN_PAT"
     COMPLETE = "COMPLETE"
     LOW_BATTERY = "LOW_BATTERY"
-    CHAGING_BATTERY = "CHAGING_BATTERY"   # spec spelling preserved
+    CHARGING_BATTERY = "CHARGING_BATTERY"
     ERROR = "ERROR"
     EMERGENCY = "EMERGENCY"               # externally triggered stop (nurse/admin); distinct from ERROR
 
@@ -81,7 +81,7 @@ BLOCKING_ROBOT_STATES: set[str] = {
     RobotState.ERROR,
     RobotState.EMERGENCY,
     RobotState.LOW_BATTERY,
-    RobotState.CHAGING_BATTERY,
+    RobotState.CHARGING_BATTERY,
     RobotState.MOVING,
     RobotState.WAIT_NFC,
     RobotState.AUTH_SUCCESS,

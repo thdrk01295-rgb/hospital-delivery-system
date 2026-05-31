@@ -54,6 +54,10 @@ def _handle_robot_status(raw: dict) -> None:
     from app.websocket.manager import ws_manager
     from app.scheduler.dispatcher import maybe_dispatch
 
+    # Temporary: normalize old misspelled value from robot clients not yet updated
+    if raw.get("state") == "CHAGING_BATTERY":
+        raw = {**raw, "state": "CHARGING_BATTERY"}
+
     data = MqttRobotStatusPayload(**raw)
     db = SessionLocal()
     try:

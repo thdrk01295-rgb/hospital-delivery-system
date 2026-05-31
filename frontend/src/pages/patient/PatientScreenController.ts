@@ -9,7 +9,7 @@
  *   Rule 0 (gate): If no active task → SERVICE_SELECTION always.
  *                  Robot state is IGNORED when no active task exists.
  *
- *   Rule 1 (high): Robot state is ERROR | LOW_BATTERY | CHAGING_BATTERY
+ *   Rule 1 (high): Robot state is ERROR | LOW_BATTERY | CHARGING_BATTERY
  *                  → ROBOT_STATUS
  *
  *   Rule 2:        Robot state = DELIVERY_OPEN_PAT → DELIVERY_ACTION
@@ -22,7 +22,7 @@
  */
 import type { Task, RobotState, PatientScreenMode } from '@/types'
 
-const ABNORMAL_STATES: RobotState[] = ['ERROR', 'LOW_BATTERY', 'CHAGING_BATTERY']
+const ABNORMAL_STATES: RobotState[] = ['ERROR', 'LOW_BATTERY', 'CHARGING_BATTERY']
 const ACTIVE_STATUSES = ['PENDING', 'DISPATCHED', 'IN_PROGRESS'] as const
 
 export function resolvePatientScreenMode(

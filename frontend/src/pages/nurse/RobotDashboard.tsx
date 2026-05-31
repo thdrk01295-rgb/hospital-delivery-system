@@ -30,7 +30,7 @@ const STATE_DISPLAY: Record<RobotState, { text: string; bg: string; color: strin
   DELIVERY_OPEN_PAT: { text: '의류 작업을 완료 후 완료 버튼을 눌러주세요',             bg: '#16a085', color: '#fff'    },
   COMPLETE:          { text: '처리 완료',                                             bg: '#27ae60', color: '#fff'    },
   LOW_BATTERY:       { text: '충전이 필요합니다',                                     bg: '#e67e22', color: '#fff'    },
-  CHAGING_BATTERY:   { text: '충전중',                                                bg: '#95a5a6', color: '#fff'    },
+  CHARGING_BATTERY:  { text: '충전중',                                                bg: '#95a5a6', color: '#fff'    },
   ERROR:             { text: 'ERROR. 관리자에게 문의하세요',                          bg: '#c0392b', color: '#fff'    },
 }
 
