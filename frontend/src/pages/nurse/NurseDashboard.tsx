@@ -17,7 +17,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { fetchRobotStatus }       from '@/api/robot'
-import { fetchOngoingTasks, fetchCompletedTasks, triggerEmergency } from '@/api/tasks'
+import { fetchOngoingTasks, fetchCompletedTasks, triggerEmergency, cancelNurseTask } from '@/api/tasks'
 import { fetchInventory }         from '@/api/inventory'
 import { fetchActiveAbnormalEvent } from '@/api/abnormalEvents'
 import { useRobotStore }          from '@/store/robotStore'
@@ -36,7 +36,7 @@ export function NurseDashboard() {
   const navigate        = useNavigate()
   const { logout }      = useAuthStore()
   const { robot, setRobot }               = useRobotStore()
-  const { ongoingTasks, completedTasks, setOngoingTasks, setCompletedTasks } = useTaskStore()
+  const { ongoingTasks, completedTasks, setOngoingTasks, setCompletedTasks, applyTaskUpdate } = useTaskStore()
   const { items: inventory, setItems }    = useInventoryStore()
   const { setActiveEvent }                = useAbnormalEventStore()
   const [now, setNow]                     = useState(new Date())
@@ -64,6 +64,15 @@ export function NurseDashboard() {
       setActiveEvent(abnormal)
     }).catch(console.error)
   }, [])
+
+  async function handleCancelTask(taskId: number) {
+    try {
+      const updated = await cancelNurseTask(taskId)
+      applyTaskUpdate(updated)
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : '작업 취소 실패')
+    }
+  }
 
   async function handleEmergency() {
     if (!window.confirm('긴급 호출을 발생시키겠습니까?')) return
@@ -133,7 +142,7 @@ export function NurseDashboard() {
           <h3 style={cardTitle}>진행 중인 작업 ({ongoingTasks.length})</h3>
           {ongoingTasks.length === 0
             ? <p style={{ color: '#888' }}>진행 중인 작업 없음</p>
-            : ongoingTasks.map((t) => <TaskCard key={t.id} task={t} />)
+            : ongoingTasks.map((t) => <TaskCard key={t.id} task={t} onCancel={handleCancelTask} />)
           }
         </section>
 

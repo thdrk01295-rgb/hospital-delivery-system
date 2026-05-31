@@ -6,6 +6,10 @@ export function createNurseOrder(body: NurseOrderCreate) {
   return api.post<Task>('/tasks/nurse/order', body)
 }
 
+export function cancelNurseTask(taskId: number) {
+  return api.post<Task>(`/tasks/nurse/cancel/${taskId}`)
+}
+
 export function triggerEmergency() {
   return api.post<Task>('/tasks/nurse/emergency')
 }

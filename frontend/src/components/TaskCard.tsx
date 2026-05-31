@@ -30,12 +30,16 @@ const STATUS_COLORS: Record<string, string> = {
   FAILED:      '#c0392b',
 }
 
+const CANCELLABLE: Set<string> = new Set(['PENDING', 'DISPATCHED', 'IN_PROGRESS'])
+
 interface Props {
   task: Task
   compact?: boolean
+  /** If provided, a cancel button is shown for active (non-terminal) tasks. */
+  onCancel?: (taskId: number) => void
 }
 
-export function TaskCard({ task, compact }: Props) {
+export function TaskCard({ task, compact, onCancel }: Props) {
   const color = STATUS_COLORS[task.status] ?? '#999'
 
   return (
@@ -46,9 +50,23 @@ export function TaskCard({ task, compact }: Props) {
     }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <strong>{TYPE_LABELS[task.task_type] ?? task.task_type}</strong>
-        <span style={{ fontSize: '0.8rem', color, fontWeight: 600 }}>
-          {STATUS_LABELS[task.status] ?? task.status}
-        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: '0.8rem', color, fontWeight: 600 }}>
+            {STATUS_LABELS[task.status] ?? task.status}
+          </span>
+          {onCancel && !compact && CANCELLABLE.has(task.status) && (
+            <button
+              onClick={() => onCancel(task.id)}
+              style={{
+                padding: '0.15rem 0.55rem', fontSize: '0.75rem',
+                background: 'transparent', color: '#c0392b',
+                border: '1px solid #c0392b', borderRadius: 4, cursor: 'pointer',
+              }}
+            >
+              취소
+            </button>
+          )}
+        </div>
       </div>
       {!compact && (
         <>
