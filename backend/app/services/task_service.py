@@ -131,7 +131,6 @@ def requeue_task(db: Session, task_id: int) -> Optional[Task]:
     db.commit()
     db.refresh(task)
     return task
-    return task
 
 
 def create_emergency_task(db: Session) -> Task:

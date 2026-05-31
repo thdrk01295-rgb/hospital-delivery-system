@@ -1,195 +1,255 @@
-# Hospital Logistics AMR — MQTT Integration Spec
+# Hospital Logistics AMR — MQTT Integration Specification
 
-**Audience:** Robot firmware / embedded team  
-**Source of truth:** `backend/app/mqtt/`, `backend/app/constants/mqtt_topics.py`, `backend/app/schemas/robot.py`, `backend/app/scheduler/dispatcher.py`  
-**Last updated:** 2026-05-31
-
----
-
-## 1. Overview
-
-The server (FastAPI backend) and the AMR robot communicate exclusively over MQTT. The broker is Mosquitto (default: `localhost:1883`).
-
-| Role | Responsibility |
-|---|---|
-| **Robot** | Publishes state, location, battery, error, and task-complete events |
-| **Server** | Subscribes to all robot topics; publishes task assignments, cancellations, and emergency calls |
-
-The server uses incoming MQTT messages to update its database and push real-time events to the nurse/patient dashboards via WebSocket. The robot uses incoming MQTT messages to know which task to execute next and when to stop or resume.
+**Audience:** Backend/server team, robot firmware / embedded team, server_bridge team  
+**Scope:** MQTT contract between FastAPI server and AMR robot  
+**Last updated:** 2026-06-01  
+**Source:** Verified against backend source code
 
 ---
 
-## 2. Topic List
+## 0. Revision Summary (v2 → v3)
 
-### Robot → Server
+1. `robot/location` removed from required contract — server infers location from `robot/task_complete` destination.
+2. `robot/battery` is now the server-side trigger for low-battery handling (`battery_percent <= 20`).
+3. `robot/status` is state-change notification, not periodic heartbeat.
+4. `CHARGING_BATTERY` is the final enum spelling (`CHAGING_BATTERY` accepted as legacy only).
+5. `server/task_assign` payload now includes `robot_id`.
+6. `destination` is required (non-null) for all dispatched robot tasks.
+7. `robot/status.timestamp` is optional; server uses receive time when omitted.
+8. `robot/error.error_message` is the standard field; `error` accepted as fallback.
+9. `server/task_finish` added for patient clothing task completion.
+10. `server/task_cancel` publish now implemented in nurse/patient cancel flows.
+11. Emergency STOP requeues interrupted task to PENDING (not CANCELLED).
+12. `robot/status { state: "COMPLETE" }` does not finalize task DB status.
 
-| Topic | Purpose |
-|---|---|
-| `robot/status` | Robot state changed (IDLE, MOVING, ARRIVED, etc.) |
-| `robot/location` | Robot arrived at or departed from a known location |
-| `robot/battery` | Battery level update |
-| `robot/error` | Robot encountered an error |
-| `robot/task_complete` | Robot finished executing an assigned task |
+---
 
-### Server → Robot
+## 1. System Overview
+
+```
+Robot (AMR-001)
+    │
+    │  MQTT  (broker: configurable, default port 1883)
+    ▼
+Server (FastAPI + MSSQL)
+    │
+    │  WebSocket  (ws://host/ws)
+    ▼
+Web Dashboard / Patient UI (React)
+```
+
+---
+
+## 2. MQTT Topic List
+
+### 2.1 Robot → Server
+
+| Topic | Purpose | Required |
+|---|---|---|
+| `robot/status` | Robot state-change report | Yes |
+| `robot/battery` | Battery percentage update; low-battery trigger | Required for low-battery auto-return |
+| `robot/error` | Robot self-reported error | Yes |
+| `robot/task_complete` | Task completion (non-patient tasks only) | Yes |
+| `robot/location` | ~~Deprecated~~ | No longer required |
+
+### 2.2 Server → Robot
 
 | Topic | Purpose | Status |
 |---|---|---|
-| `server/task_assign` | Assign the next task to the robot | ✅ Implemented |
-| `server/task_cancel` | Cancel a task currently held by the robot | ⚠️ Topic defined, not yet published |
-| `server/emergency_call` | Emergency STOP or RELEASE command | ✅ Implemented |
+| `server/task_assign` | Dispatch task to robot | ✅ Implemented |
+| `server/task_cancel` | Cancel active task held by robot | ✅ Implemented |
+| `server/task_finish` | Signal robot to clear patient clothing task | ✅ Implemented |
+| `server/emergency_call` | Emergency STOP / RELEASE | ✅ Implemented |
 
 ---
 
-## 3. Payload Specifications
+## 3. Common Payload Rules
 
-All payloads are JSON-encoded UTF-8 strings. All timestamps must be ISO 8601 with timezone (e.g. `"2026-05-31T09:00:00+00:00"`).
+1. Payloads are JSON-encoded UTF-8 strings.
+2. `robot_id` must be `"AMR-001"` (single-robot system).
+3. `task_id` is an integer matching `tasks.id` in the server DB.
+4. `location_code` strings must match `locations.location_code` in the server DB exactly.
+5. `timestamp` is optional. When omitted, the server uses its receive time.
+6. All enum/string values are case-sensitive.
 
 ---
 
-### `robot/status` — Robot → Server
+## 4. RobotState Values
 
-**Server handler:** `_handle_robot_status` in `mqtt/handlers.py`  
-**Server actions:**
-- Updates `robots.current_state` in DB
-- Broadcasts `robot_state_update` WebSocket event to dashboards
-- If state is `LOW_BATTERY`: opens a `low_battery` abnormal event
-- If state is `IDLE`: resolves open `error`/`low_battery` events, then triggers task dispatch
+Valid values for `robot/status.state`:
+
+| Value | Meaning |
+|---|---|
+| `IDLE` | Robot idle — triggers task dispatch |
+| `MOVING` | Navigating |
+| `ARRIVED` | Arrived at destination |
+| `WAIT_NFC` | Waiting for NFC/user interaction |
+| `AUTH_SUCCESS` | NFC authentication succeeded |
+| `AUTH_FAIL` | NFC authentication failed |
+| `DELIVERY_OPEN_NUR` | Nurse-side compartment open |
+| `DELIVERY_OPEN_PAT` | Patient-side compartment open |
+| `COMPLETE` | Task cycle complete (state notification only — does not finalize DB) |
+| `LOW_BATTERY` | Low-battery state |
+| `CHARGING_BATTERY` | Charging |
+| `ERROR` | Self-reported device fault |
+| `EMERGENCY` | Server-commanded emergency stop |
+
+**Deprecated:** `CHAGING_BATTERY` — normalized to `CHARGING_BATTERY` by the server for backward compatibility. Remove from new robot code.
+
+**Dispatch-blocking states** (server will not dispatch while robot is in any of these):
+```
+EMERGENCY, ERROR, LOW_BATTERY, CHARGING_BATTERY,
+MOVING, ARRIVED, WAIT_NFC, AUTH_SUCCESS, AUTH_FAIL,
+DELIVERY_OPEN_NUR, DELIVERY_OPEN_PAT
+```
+
+Only `IDLE` enables normal task dispatch.
+
+**Low-battery exception:** While `LOW_BATTERY` blocks normal task dispatch, the server may dispatch exactly one system station-return task (`BATTERY_LOW` type, destination `STATION-01`) while the robot is in `LOW_BATTERY`. No other task may be dispatched until the condition is resolved.
+
+---
+
+## 5. TaskType Values
+
+| Value | Priority | Initiated by | Notes |
+|---|---|---|---|
+| `emergency_call` | 1 | Nurse/admin | Not dispatched via `server/task_assign`; uses `server/emergency_call` |
+| `battery_low` | 1 | System | Internal station-return task; dispatched when battery ≤ 20% |
+| `specimen_delivery` | 2 | Nurse | Normal robot task |
+| `kit_delivery` | 3 | Nurse | Normal robot task |
+| `logistics_delivery` | 4 | Nurse | Normal robot task |
+| `clothes_refill` | 5 | System/Nurse | Normal robot task |
+| `patient_clothes_rental` | 6 | Patient | Robot must NOT publish `robot/task_complete` |
+| `patient_clothes_return` | 6 | Patient | Robot must NOT publish `robot/task_complete` |
+| `used_clothes_collection` | 7 | System/Nurse | Normal robot task |
+
+---
+
+## 6. TaskStatus Values
+
+| Value | Meaning |
+|---|---|
+| `PENDING` | Created, waiting for dispatch |
+| `DISPATCHED` | `server/task_assign` sent; robot executing |
+| `IN_PROGRESS` | Robot actively executing |
+| `COMPLETE` | Task completed successfully |
+| `CANCELLED` | Cancelled by nurse/patient |
+| `FAILED` | Failed during execution |
+
+---
+
+## 7. Payload Specifications
+
+### 7.1 `robot/status` — Robot → Server
+
+**Server action:** Update `robots.current_state`, broadcast `robot_state_update`.  
+On `IDLE`: resolve open `error`/`low_battery` events, trigger `maybe_dispatch()`.
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `robot_id` | string | ✅ | Must match `robots.robot_code` in DB — use `"AMR-001"` |
-| `state` | string | ✅ | Must be a valid `RobotState` value (see §4) |
-| `timestamp` | string (ISO 8601) | ✅ | Time of state change on robot side |
+| `robot_id` | string | Yes | Must be `"AMR-001"` |
+| `state` | string | Yes | Must be a final RobotState value |
+| `task_id` | integer | No | Include when a task is active or relevant |
+| `timestamp` | string ISO 8601 | No | Server uses receive time if omitted |
 
 ```json
-{
-  "robot_id": "AMR-001",
-  "state": "IDLE",
-  "timestamp": "2026-05-31T09:00:00+00:00"
-}
+{ "robot_id": "AMR-001", "state": "MOVING", "task_id": 42 }
+```
+
+Minimum:
+```json
+{ "robot_id": "AMR-001", "state": "IDLE" }
+```
+
+> `robot/status { state: "COMPLETE" }` is a state notification only. Task DB finalization happens from `robot/task_complete` (normal tasks) or the patient web endpoint (patient tasks).
+
+---
+
+### 7.2 `robot/location` — Deprecated / Non-Required
+
+**Status:** No longer required. The server now infers robot location from `robot/task_complete` destination.  
+The handler is retained for backward compatibility only. Remove from new robot/server_bridge code.
+
+---
+
+### 7.3 `robot/battery` — Robot → Server
+
+**Server action:** Update `robots.battery_percent`, broadcast `robot_battery_update`.  
+If `battery_percent <= 20`: trigger low-battery handling (see §9).
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `robot_id` | string | Yes | Must be `"AMR-001"` |
+| `battery_percent` | float | Yes | Range `0.0`–`100.0` |
+| `timestamp` | string ISO 8601 | No | Server uses receive time if omitted |
+
+```json
+{ "robot_id": "AMR-001", "battery_percent": 73.5 }
 ```
 
 ---
 
-### `robot/location` — Robot → Server
+### 7.4 `robot/error` — Robot → Server
 
-**Server handler:** `_handle_robot_location` in `mqtt/handlers.py`  
-**Server actions:**
-- Looks up `location_code` in `locations` table
-- Sets `robots.current_location_id` to the matched row's `id`
-- Broadcasts `robot_location_update` WebSocket event
+**Server action:** Set robot state to `ERROR`, open `error` AbnormalEvent, broadcast `robot_state_update` and `abnormal_event_update`.
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `robot_id` | string | ✅ | Must match `robots.robot_code` |
-| `location_code` | string | ✅ | Must exactly match a `locations.location_code` value (see §4) |
-| `timestamp` | string (ISO 8601) | ✅ | Time of location report |
+| `robot_id` | string | Yes | Must be `"AMR-001"` |
+| `error_message` | string | Yes | Final standard field |
+| `error` | string | No | Fallback for older clients; used if `error_message` absent |
+| `task_id` | integer | No | Include if error is tied to an active task |
+| `timestamp` | string ISO 8601 | No | Server uses receive time if omitted |
 
 ```json
 {
   "robot_id": "AMR-001",
-  "location_code": "STATION-01",
-  "timestamp": "2026-05-31T09:01:00+00:00"
+  "error_message": "Navigation failed in state: MOVING_TO_DESTINATION",
+  "task_id": 42
 }
 ```
 
-> **Important:** If `location_code` does not match any row in `locations`, the DB update is silently skipped. The robot must publish only codes that exist in the seeded `locations` table.
+To clear error state: publish `robot/status { "state": "IDLE" }` — server auto-resolves open `error` events.
 
 ---
 
-### `robot/battery` — Robot → Server
+### 7.5 `robot/task_complete` — Robot → Server
 
-**Server handler:** `_handle_robot_battery` in `mqtt/handlers.py`  
-**Server actions:**
-- Updates `robots.battery_percent` in DB
-- Broadcasts `robot_battery_update` WebSocket event
+**Server action:**
+1. Set `tasks.status = COMPLETE`, record `completed_at`.
+2. Update `robots.current_location_id` from the completed task's `destination_location_id`.
+3. Broadcast `task_status_update` and `robot_location_update` (if location changed).
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `robot_id` | string | ✅ | Must match `robots.robot_code` |
-| `battery_percent` | float | ✅ | Range `0.0`–`100.0` |
-| `timestamp` | string (ISO 8601) | ✅ | |
+| `robot_id` | string | Yes | Must be `"AMR-001"` |
+| `task_id` | integer | Yes | Must match `server/task_assign.task_id` |
+| `timestamp` | string ISO 8601 | No | Server uses receive time if omitted |
+
+```json
+{ "robot_id": "AMR-001", "task_id": 42 }
+```
+
+> **Patient task rule:** Do NOT publish `robot/task_complete` for `patient_clothes_rental` or `patient_clothes_return`. Patient task completion is handled by the patient web UI → `server/task_finish`.
+
+---
+
+### 7.6 `server/task_assign` — Server → Robot
+
+**Published when:** Robot transitions to `IDLE` and a `PENDING` task with a valid destination exists.
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `robot_id` | string | Yes | `"AMR-001"` — for server_bridge filtering |
+| `task_id` | integer | Yes | Round-trip back in `robot/task_complete` |
+| `task_type` | string | Yes | Must be a valid `TaskType` |
+| `origin` | string or null | No | `null` = skip origin, go directly to destination |
+| `destination` | string | Yes | Must not be null; exact `locations.location_code` |
+| `priority` | integer | Yes | Lower = higher priority |
 
 ```json
 {
   "robot_id": "AMR-001",
-  "battery_percent": 73.5,
-  "timestamp": "2026-05-31T09:02:00+00:00"
-}
-```
-
-> The server does **not** derive low-battery state from this percentage value. Low-battery state is triggered by `robot/status` with `state: "LOW_BATTERY"`, not by this topic.
-
----
-
-### `robot/error` — Robot → Server
-
-**Server handler:** `_handle_robot_error` in `mqtt/handlers.py`  
-**Server actions:**
-- Forces `robots.current_state = "ERROR"` in DB
-- Opens an `error` abnormal event with the provided message (idempotent — duplicates are suppressed)
-- Broadcasts `robot_state_update` and `abnormal_event_update` WebSocket events
-
-| Field | Type | Required | Notes |
-|---|---|---|---|
-| `robot_id` | string | ✅ | Must match `robots.robot_code` |
-| `error_message` | string | ✅ | Human-readable description stored in `abnormal_events.note` |
-| `timestamp` | string (ISO 8601) | ✅ | |
-
-```json
-{
-  "robot_id": "AMR-001",
-  "error_message": "Motor controller fault on right wheel",
-  "timestamp": "2026-05-31T09:03:00+00:00"
-}
-```
-
-> To clear an error state, publish `robot/status` with `state: "IDLE"`. The server resolves all open `error` abnormal events automatically on IDLE.
-
----
-
-### `robot/task_complete` — Robot → Server
-
-**Server handler:** `_handle_task_complete` in `mqtt/handlers.py`  
-**Server actions:**
-- Sets `tasks.status = "COMPLETE"` and `tasks.completed_at = now()` for the given `task_id`
-- Broadcasts `task_status_update` WebSocket event
-
-| Field | Type | Required | Notes |
-|---|---|---|---|
-| `robot_id` | string | ✅ | Must match `robots.robot_code` |
-| `task_id` | integer | ✅ | Must match the `tasks.id` received in the prior `server/task_assign` |
-| `timestamp` | string (ISO 8601) | ✅ | |
-
-```json
-{
-  "robot_id": "AMR-001",
-  "task_id": 42,
-  "timestamp": "2026-05-31T09:10:00+00:00"
-}
-```
-
-> **Patient clothing tasks:** For `patient_clothes_rental` and `patient_clothes_return`, task completion is triggered by the patient pressing a button in the web UI (`POST /tasks/{task_id}/complete`). The robot does **not** publish `robot/task_complete` for these task types.
-
----
-
-### `server/task_assign` — Server → Robot
-
-**Published by:** `dispatcher.py → _publish_task_assignment()`  
-**Triggered when:** Robot publishes `robot/status` with `state: "IDLE"` and a PENDING task exists  
-**Robot action:** Navigate to `destination`; publish state updates; publish `robot/task_complete` (or `robot/status IDLE`) when done
-
-| Field | Type | Notes |
-|---|---|---|
-| `task_id` | integer | Round-trip this value back in `robot/task_complete` |
-| `task_type` | string | One of the `TaskType` values (see §4) |
-| `origin` | string or null | `location_code` of departure point; null if robot has no recorded location |
-| `destination` | string or null | `location_code` of delivery target; null for tasks without a fixed destination |
-| `priority` | integer | Lower = higher priority (1 = emergency/battery) |
-
-```json
-{
   "task_id": 42,
   "task_type": "kit_delivery",
   "origin": "STATION-01",
@@ -200,312 +260,243 @@ All payloads are JSON-encoded UTF-8 strings. All timestamps must be ISO 8601 wit
 
 ---
 
-### `server/task_cancel` — Server → Robot
+### 7.7 `server/task_cancel` — Server → Robot
 
-**Status:** Topic string defined in `mqtt_topics.py`. **No publish call exists yet** in the current server code. When a nurse cancels a task via the web UI, the DB is updated but the robot is not notified over MQTT.
+Published when a nurse or patient cancels a task that is DISPATCHED or IN_PROGRESS. Also published during low-battery handling when requeuing an active task.
 
-When implemented, the expected payload:
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `robot_id` | string | Yes | Must be `"AMR-001"` |
+| `task_id` | integer | Yes | Task to cancel |
 
 ```json
-{
-  "task_id": 42
-}
+{ "robot_id": "AMR-001", "task_id": 42 }
 ```
 
-> ⚠️ Do not implement a handler for this topic yet. Confirm with the server team when the publish is added.
+**Robot behavior:**
+1. If `task_id` matches active task: cancel navigation goal, clear active task.
+2. Publish `robot/status { "state": "IDLE" }`.
 
 ---
 
-### `server/emergency_call` — Server → Robot
+### 7.8 `server/task_finish` — Server → Robot
 
-**Published by:** `routers/tasks.py → trigger_emergency()` and `release_emergency()`  
-**Robot action:** On `"STOP"` — halt immediately, transition to `EMERGENCY` state, publish `robot/status { state: "EMERGENCY" }`. On `"RELEASE"` — transition to `IDLE`, publish `robot/status { state: "IDLE" }`.
+Published after patient presses the web completion button for a patient clothing task.
 
-The `command` field distinguishes STOP from RELEASE.
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `robot_id` | string | Yes | Must be `"AMR-001"` |
+| `task_id` | integer | Yes | Patient clothing task that was completed |
 
-**STOP — published when nurse triggers emergency:**
 ```json
-{
-  "robot_id": "AMR-001",
-  "command": "STOP"
-}
+{ "robot_id": "AMR-001", "task_id": 43 }
 ```
 
-**RELEASE — published when nurse releases emergency:**
-```json
-{
-  "robot_id": "AMR-001",
-  "command": "RELEASE"
-}
-```
-
-See §6 for the full emergency call flow and task handling contract.
+**Robot behavior:**
+1. Process only if active task exists and `task_id` matches.
+2. Clear active task and patient interaction state.
+3. Publish `robot/status { "state": "IDLE" }`.
 
 ---
 
-## 4. Required Conventions
+### 7.9 `server/emergency_call` — Server → Robot
 
-### `robot_id` / `robot_code`
+STOP and RELEASE use the same topic, differentiated by `command`.
 
-The server robot code is `"AMR-001"`. Source: `robot_service.py → get_or_create_robot(db, robot_code="AMR-001")`.
+**STOP:**
+```json
+{ "robot_id": "AMR-001", "command": "STOP" }
+```
 
-The server auto-creates the `robots` row on first MQTT message. The robot must use `"AMR-001"` as `robot_id` in all payloads.
+**RELEASE:**
+```json
+{ "robot_id": "AMR-001", "command": "RELEASE" }
+```
+
+| command | Robot action |
+|---|---|
+| `STOP` | Cancel nav goal, issue immediate velocity/motor stop (zero `cmd_vel`), clear active task, publish `robot/status { state: "EMERGENCY" }` |
+| `RELEASE` | Exit EMERGENCY, publish `robot/status { state: "IDLE" }` |
 
 ---
 
-### `location_code` matching rule
+## 8. Low-Battery Handling Contract
 
-All location codes published on `robot/location` must exactly match a `location_code` value in the `locations` table. Non-bed locations use plain string codes:
+**Trigger:** Server receives `robot/battery` with `battery_percent <= 20`.
+
+**Server actions (idempotent):**
+1. Update `robots.battery_percent`.
+2. Broadcast `robot_battery_update`.
+3. If robot state is not already `LOW_BATTERY` or `CHARGING_BATTERY`: set `robots.current_state = LOW_BATTERY`, broadcast `robot_state_update`.
+4. Open (or return existing) `low_battery` AbnormalEvent, broadcast `abnormal_event_update`.
+5. If robot has an active `DISPATCHED`/`IN_PROGRESS` task: publish `server/task_cancel` for it, reset task to `PENDING`.
+6. If no existing `battery_low` task in `PENDING`/`DISPATCHED`/`IN_PROGRESS`: create a `battery_low` task with `destination = STATION-01`, mark `DISPATCHED`, publish `server/task_assign`.
+
+**Idempotency guarantees:**
+- No duplicate `low_battery` AbnormalEvents.
+- No duplicate station-return tasks while one is already pending/active.
+- `CHARGING_BATTERY` state is not overridden.
+
+**Resolution:** When robot publishes `robot/status { state: "IDLE" }`, server resolves all open `low_battery` events and triggers normal dispatch.
+
+---
+
+## 9. Emergency Call Contract
+
+### 9.1 STOP flow
+
+1. Nurse presses E-Stop → `POST /tasks/nurse/emergency`.
+2. Server creates `emergency_call` task (priority 1), opens `emergency_call` AbnormalEvent.
+3. Server requeues any `DISPATCHED`/`IN_PROGRESS` task back to `PENDING`.
+4. Server publishes `server/emergency_call { "command": "STOP" }`.
+5. Robot: cancel nav goal, issue immediate velocity/motor stop, clear active task, publish `robot/status { "state": "EMERGENCY" }`.
+
+### 9.2 Server task handling on STOP
+
+| Task status at STOP | Action |
+|---|---|
+| `PENDING` | Unchanged |
+| `DISPATCHED` | Reset to `PENDING` |
+| `IN_PROGRESS` | Reset to `PENDING` |
+| `COMPLETE` / `CANCELLED` / `FAILED` | Unchanged |
+
+### 9.3 RELEASE flow
+
+1. Nurse presses Release → `POST /tasks/nurse/emergency/release`.
+2. Server publishes `server/emergency_call { "command": "RELEASE" }`.
+3. Server cancels remaining `PENDING` `emergency_call` tasks, resolves `emergency_call` AbnormalEvent.
+4. Robot exits EMERGENCY, publishes `robot/status { "state": "IDLE" }`.
+5. Server receives `IDLE` → triggers `maybe_dispatch()`.
+
+---
+
+## 10. Patient Clothing Task Flow
+
+For `patient_clothes_rental` and `patient_clothes_return`:
+
+1. Robot receives `server/task_assign`.
+2. Robot navigates to destination (patient's bed).
+3. Robot opens patient compartment, publishes `robot/status { "state": "DELIVERY_OPEN_PAT" }`.
+4. Patient presses completion button → `POST /tasks/{task_id}/complete`.
+5. Server sets `tasks.status = COMPLETE`, broadcasts `task_status_update`.
+6. Server publishes `server/task_finish { "robot_id": "AMR-001", "task_id": <id> }`.
+7. Robot clears active task, publishes `robot/status { "state": "IDLE" }`.
+
+**Robot must NOT publish `robot/task_complete` for patient clothing tasks.**
+
+---
+
+## 11. AbnormalEvent Types
+
+| Type | Trigger | Resolution |
+|---|---|---|
+| `error` | `robot/error` MQTT message | Robot sends `robot/status { state: "IDLE" }` |
+| `low_battery` | `robot/battery` with `battery_percent <= 20` | Robot sends `robot/status { state: "IDLE" }` |
+| `emergency_call` | Nurse presses E-Stop | Nurse presses Release → `POST /tasks/nurse/emergency/release` |
+
+`emergency_call` is never auto-resolved on IDLE — explicit release is required.
+
+---
+
+## 12. location_code Contract
+
+Source of truth: `locations.location_code` column in the server DB.
+
+**Non-bed location codes:**
 
 | location_code | Location |
 |---|---|
-| `STATION-01` | 스테이션 |
-| `LAUNDRY-01` | 세탁실 |
-| `WAREHOUSE-01` | 창고 |
-| `SPECIMEN-LAB` | 검체실 |
-| `EXAM-A` | 검사실 A |
-| `EXAM-B` | 검사실 B |
-| `EXAM-C` | 검사실 C |
+| `STATION-01` | Nursing station |
+| `LAUNDRY-01` | Laundry room |
+| `WAREHOUSE-01` | Warehouse |
+| `SPECIMEN-LAB` | Specimen laboratory |
+| `EXAM-A` | Examination room A |
+| `EXAM-B` | Examination room B |
+| `EXAM-C` | Examination room C |
 
-> Actual codes depend on your seeded DB. Query `GET /api/locations` to get the full list of active location codes.
+**Bed location code format:** `str(floor) + str(floor*100 + room) + str(bed)`  
+Examples: `11011` (1층 101호 1번), `33045` (3층 304호 5번), `44086` (4층 408호 6번)
 
-Bed location codes are 5-digit strings: `str(floor) + str(floor*100 + room_num) + str(bed)`.
+> Do not use robot-local aliases. Robot `locations.yaml` keys must exactly match server DB `location_code` values.
 
-| Description | location_code |
+---
+
+## 13. Implementation Status
+
+| Item | Status |
 |---|---|
-| 1층 101호 1번 침상 | `11011` |
-| 2층 304호 5번 침상 | `23045` |
-| 4층 408호 6번 침상 | `44086` |
-
-Source: `backend/app/utils/location_utils.py → build_bed_code()`
-
----
-
-### `task_id` round-trip rule
-
-The `task_id` in `robot/task_complete` must exactly match the integer received in `server/task_assign`. Mismatched IDs cause the task to remain PENDING indefinitely.
-
----
-
-### `RobotState` valid values
-
-Source: `backend/app/constants/enums.py`
-
-| Value | Notes |
-|---|---|
-| `IDLE` | Triggers task dispatch |
-| `MOVING` | Navigating |
-| `ARRIVED` | At destination, waiting for NFC scan |
-| `WAIT_NFC` | Waiting for NFC authentication |
-| `AUTH_SUCCESS` | NFC auth passed |
-| `AUTH_FAIL` | NFC auth failed |
-| `DELIVERY_OPEN_NUR` | Compartment open — nurse interaction |
-| `DELIVERY_OPEN_PAT` | Compartment open — patient interaction |
-| `COMPLETE` | Task cycle complete |
-| `LOW_BATTERY` | Battery low threshold crossed |
-| `CHARGING_BATTERY` | Charging |
-| `ERROR` | Device self-reported error |
-| `EMERGENCY` | Externally triggered stop — distinct from ERROR |
-
-**States that block task dispatch** (server will not send `server/task_assign` while robot is in any of these):
-
-```
-EMERGENCY, ERROR, LOW_BATTERY, CHARGING_BATTERY,
-MOVING, ARRIVED, WAIT_NFC, AUTH_SUCCESS, AUTH_FAIL,
-DELIVERY_OPEN_NUR, DELIVERY_OPEN_PAT
-```
-
-Only `IDLE` enables dispatch.
+| `CHARGING_BATTERY` enum spelling | ✅ Updated backend/frontend/docs |
+| Legacy `CHAGING_BATTERY` normalizer | ✅ In `_handle_robot_status` |
+| `server/task_assign.robot_id` | ✅ Added to dispatcher payload |
+| `destination` non-null enforcement | ✅ Dispatcher skips tasks with null destination |
+| `robot/status.timestamp` optional | ✅ Schema updated |
+| `robot/error.error_message` + fallback `error` | ✅ Schema updated with model_validator |
+| `server/emergency_call` STOP/RELEASE | ✅ Implemented |
+| Emergency active task requeue | ✅ DISPATCHED/IN_PROGRESS → PENDING |
+| `server/task_cancel` publish | ✅ Nurse cancel, patient cancel, low-battery requeue |
+| `server/task_finish` publish | ✅ Patient web completion endpoint |
+| `robot/location` removal | ✅ Marked deprecated; handler retained for compat |
+| `robot/battery` low-battery trigger | ✅ `battery_percent <= 20` handler |
+| Low-battery idempotency | ✅ Duplicate event/task prevention |
+| Low-battery active task requeue | ✅ Requeue + `server/task_cancel` |
+| Low-battery station-return dispatch | ✅ `BATTERY_LOW` task → `STATION-01` |
+| `robot/task_complete` → robot location inference | ✅ Updates `robots.current_location_id` from task destination |
+| `robot/status COMPLETE` not finalizing task | ✅ No task finalization in status handler |
+| Patient task: `server/task_finish` on completion | ✅ Published after `POST /tasks/{id}/complete` |
 
 ---
 
-### `TaskType` valid values
-
-Source: `backend/app/constants/enums.py`
-
-| Value | Priority | Initiated by |
-|---|---|---|
-| `emergency_call` | 1 | Nurse |
-| `battery_low` | 1 | System |
-| `specimen_delivery` | 2 | Nurse |
-| `kit_delivery` | 3 | Nurse |
-| `logistics_delivery` | 4 | Nurse |
-| `clothes_refill` | 5 | System/Nurse |
-| `patient_clothes_rental` | 6 | Patient |
-| `patient_clothes_return` | 6 | Patient |
-| `used_clothes_collection` | 7 | System/Nurse |
-
----
-
-### `AbnormalEventType` valid values
-
-Source: `backend/app/services/abnormal_event_service.py`
-
-| Value | Triggered by | Resolved by |
-|---|---|---|
-| `error` | `robot/error` MQTT message | Robot sends `state: "IDLE"` |
-| `low_battery` | `robot/status` with `state: "LOW_BATTERY"` | Robot sends `state: "IDLE"` |
-| `emergency_call` | Nurse calls `POST /tasks/nurse/emergency` | Nurse calls `POST /tasks/nurse/emergency/release` |
-
-`emergency_call` events are **never** auto-resolved on IDLE — they require an explicit nurse release action.
-
----
-
-## 5. TaskStatus Values
-
-| Value | Meaning |
-|---|---|
-| `PENDING` | Created, waiting for dispatch |
-| `DISPATCHED` | `server/task_assign` sent; robot not yet moving |
-| `IN_PROGRESS` | Robot is executing the task |
-| `COMPLETE` | Task finished successfully |
-| `CANCELLED` | Cancelled by nurse or patient |
-| `FAILED` | Task failed |
-
----
-
-## 6. Emergency Call Contract (Finalized)
-
-### 6.1 Flow Overview
-
-```
-Normal operation
-      │
-      │  Nurse presses Emergency button
-      │  → POST /tasks/nurse/emergency
-      ▼
-Server publishes  server/emergency_call  { "command": "STOP" }
-      │
-      ▼
-Robot stops immediately
-Robot transitions to EMERGENCY state
-Robot publishes  robot/status  { "state": "EMERGENCY" }
-      │  (EMERGENCY is in BLOCKING_ROBOT_STATES — no dispatch while in this state)
-      │
-      │  Nurse presses Release button
-      │  → POST /tasks/nurse/emergency/release
-      ▼
-Server publishes  server/emergency_call  { "command": "RELEASE" }
-      │
-      ▼
-Robot transitions to IDLE
-Robot publishes  robot/status  { "state": "IDLE" }
-      │
-      ▼
-Server receives IDLE → resolves error/low_battery events → maybe_dispatch()
-Normal dispatch resumes (requeued task is highest priority)
-```
-
----
-
-### 6.2 Server Actions on STOP (`POST /tasks/nurse/emergency`)
-
-1. Creates an `emergency_call` task with `status = PENDING`, `priority = 1`.
-2. Finds the currently active task (`status = DISPATCHED` or `IN_PROGRESS`) and **resets it to `PENDING`** — it is NOT cancelled; it will be re-dispatched after release.
-   - `assigned_robot_id` → NULL
-   - `started_at` → NULL
-3. Opens an `emergency_call` AbnormalEvent.
-4. Broadcasts `task_status_update` (requeued task) and `abnormal_event_update` via WebSocket.
-5. Publishes `server/emergency_call { "robot_id": "AMR-001", "command": "STOP" }`.
-
----
-
-### 6.3 Server Actions on RELEASE (`POST /tasks/nurse/emergency/release`)
-
-1. Publishes `server/emergency_call { "robot_id": "AMR-001", "command": "RELEASE" }`.
-2. Cancels all remaining `emergency_call` tasks with `status = PENDING`.
-3. Resolves the open `emergency_call` AbnormalEvent.
-4. Broadcasts `task_status_update` for each cancelled task and `abnormal_event_update` via WebSocket.
-
-After release, dispatch does **not** happen immediately. It is triggered naturally when the robot transitions to `IDLE` and publishes `robot/status { state: "IDLE" }`.
-
----
-
-### 6.4 Task Handling Summary
-
-| Task status at time of STOP | Action |
-|---|---|
-| `DISPATCHED` or `IN_PROGRESS` | Reset to `PENDING` — will be re-dispatched after release |
-| `PENDING` (non-emergency tasks) | Left untouched — remains in queue |
-| `PENDING` (the new emergency_call task) | Created on STOP; cancelled on RELEASE |
-
----
-
-### 6.5 Robot Requirements for Emergency
-
-- On `command: "STOP"`: halt all movement immediately, transition to `EMERGENCY` state, publish `robot/status { state: "EMERGENCY" }`.
-- On `command: "RELEASE"`: resume from stopped position, transition to `IDLE`, publish `robot/status { state: "IDLE" }`.
-- `EMERGENCY` state is a **server-commanded stop** — distinct from `ERROR` (self-reported fault). The robot should not conflate them.
-
----
-
-## 7. Implementation Status
-
-| Feature | Status |
-|---|---|
-| Server subscribes to all 5 robot→server topics | ✅ Complete |
-| `robot/status` handler → DB update + WS broadcast | ✅ Complete |
-| `robot/location` handler → DB update + WS broadcast | ✅ Complete |
-| `robot/battery` handler → DB update + WS broadcast | ✅ Complete |
-| `robot/error` handler → DB update + abnormal event + WS broadcast | ✅ Complete |
-| `robot/task_complete` handler → task COMPLETE + WS broadcast | ✅ Complete |
-| `server/task_assign` published on robot IDLE | ✅ Complete |
-| Auto-dispatch: highest-priority PENDING task on robot IDLE | ✅ Complete |
-| Auto-task creation on inventory threshold crossing | ✅ Complete |
-| `server/emergency_call` STOP on nurse emergency trigger | ✅ Complete |
-| `server/emergency_call` RELEASE on nurse emergency release | ✅ Complete |
-| Interrupted task requeued to PENDING on STOP | ✅ Complete |
-| `server/task_cancel` publish when nurse cancels a task | ⚠️ Topic defined, not yet published |
-
----
-
-## 8. Test Messages (Copy-Paste Ready)
-
-Use these with `mosquitto_pub` or any MQTT client.
+## 14. Copy-Paste Test Messages
 
 ```bash
-# robot goes IDLE — triggers task dispatch if PENDING tasks exist
-mosquitto_pub -h localhost -p 1883 -t "robot/status" -m '{"robot_id":"AMR-001","state":"IDLE","timestamp":"2026-05-31T09:00:00+00:00"}'
+# Robot IDLE — triggers task dispatch
+mosquitto_pub -h localhost -p 1883 -t "robot/status" -m '{"robot_id":"AMR-001","state":"IDLE"}'
 
-# robot moving
-mosquitto_pub -h localhost -p 1883 -t "robot/status" -m '{"robot_id":"AMR-001","state":"MOVING","timestamp":"2026-05-31T09:01:00+00:00"}'
+# Robot state updates
+mosquitto_pub -h localhost -p 1883 -t "robot/status" -m '{"robot_id":"AMR-001","state":"MOVING","task_id":42}'
+mosquitto_pub -h localhost -p 1883 -t "robot/status" -m '{"robot_id":"AMR-001","state":"DELIVERY_OPEN_PAT","task_id":42}'
+mosquitto_pub -h localhost -p 1883 -t "robot/status" -m '{"robot_id":"AMR-001","state":"CHARGING_BATTERY"}'
+mosquitto_pub -h localhost -p 1883 -t "robot/status" -m '{"robot_id":"AMR-001","state":"EMERGENCY"}'
 
-# robot arrived at nursing station
-mosquitto_pub -h localhost -p 1883 -t "robot/location" -m '{"robot_id":"AMR-001","location_code":"STATION-01","timestamp":"2026-05-31T09:01:30+00:00"}'
+# Battery — normal
+mosquitto_pub -h localhost -p 1883 -t "robot/battery" -m '{"robot_id":"AMR-001","battery_percent":73.5}'
 
-# robot arrived at bed 1층-101호-1번
-mosquitto_pub -h localhost -p 1883 -t "robot/location" -m '{"robot_id":"AMR-001","location_code":"11011","timestamp":"2026-05-31T09:04:00+00:00"}'
+# Battery — triggers LOW_BATTERY handling and station-return dispatch
+mosquitto_pub -h localhost -p 1883 -t "robot/battery" -m '{"robot_id":"AMR-001","battery_percent":20.0}'
 
-# battery update
-mosquitto_pub -h localhost -p 1883 -t "robot/battery" -m '{"robot_id":"AMR-001","battery_percent":68.0,"timestamp":"2026-05-31T09:05:00+00:00"}'
+# Robot self-reported error
+mosquitto_pub -h localhost -p 1883 -t "robot/error" -m '{"robot_id":"AMR-001","error_message":"Navigation failed","task_id":42}'
 
-# robot self-reported error
-mosquitto_pub -h localhost -p 1883 -t "robot/error" -m '{"robot_id":"AMR-001","error_message":"Motor controller fault on right wheel","timestamp":"2026-05-31T09:06:00+00:00"}'
-
-# task complete (replace task_id with actual value from server/task_assign)
-mosquitto_pub -h localhost -p 1883 -t "robot/task_complete" -m '{"robot_id":"AMR-001","task_id":42,"timestamp":"2026-05-31T09:10:00+00:00"}'
-
-# robot enters EMERGENCY state (in response to server/emergency_call STOP)
-mosquitto_pub -h localhost -p 1883 -t "robot/status" -m '{"robot_id":"AMR-001","state":"EMERGENCY","timestamp":"2026-05-31T09:11:00+00:00"}'
+# Task complete (non-patient task)
+mosquitto_pub -h localhost -p 1883 -t "robot/task_complete" -m '{"robot_id":"AMR-001","task_id":42}'
 ```
 
 Monitor server→robot messages:
-
 ```bash
 mosquitto_sub -h localhost -p 1883 -t "server/#" -v
 ```
 
+Expected server→robot messages:
+```json
+{"robot_id":"AMR-001","task_id":42,"task_type":"kit_delivery","origin":"STATION-01","destination":"11011","priority":3}
+{"robot_id":"AMR-001","task_id":42}
+{"robot_id":"AMR-001","task_id":43}
+{"robot_id":"AMR-001","command":"STOP"}
+{"robot_id":"AMR-001","command":"RELEASE"}
+```
+
 ---
 
-## 9. Key Source Files
+## 15. Key Source Files
 
-| File | What to read |
+| File | What to verify |
 |---|---|
-| `backend/app/constants/mqtt_topics.py` | All topic strings |
-| `backend/app/mqtt/handlers.py` | Inbound payload handling and DB side-effects |
-| `backend/app/schemas/robot.py` | Pydantic schemas — authoritative field names and types |
-| `backend/app/scheduler/dispatcher.py` | `server/task_assign` payload construction |
-| `backend/app/services/robot_service.py` | `robot_id` → DB row mapping; `get_or_create_robot` |
-| `backend/app/constants/enums.py` | All valid `RobotState`, `TaskType`, `TaskStatus` values |
-| `backend/app/routers/tasks.py` | Emergency STOP/RELEASE endpoint implementations |
-| `backend/app/utils/location_utils.py` | `build_bed_code()` — bed location_code generation |
+| `backend/app/constants/enums.py` | `RobotState`, `TaskType`, `TaskStatus`, blocking states |
+| `backend/app/constants/mqtt_topics.py` | All topic constants; `robot/location` deprecated |
+| `backend/app/mqtt/handlers.py` | All inbound handlers; `_handle_low_battery`; location inference in `_handle_task_complete` |
+| `backend/app/schemas/robot.py` | Optional timestamps; `task_id`; `error` fallback |
+| `backend/app/scheduler/dispatcher.py` | `robot_id` in payload; null destination guard |
+| `backend/app/routers/tasks.py` | Nurse cancel; patient complete → `server/task_finish`; cancel → `server/task_cancel` |
+| `backend/app/services/task_service.py` | `requeue_task` |
+| `backend/app/services/abnormal_event_service.py` | Idempotent `open_event`; `resolve_all_by_type` |
+| `frontend/src/types/index.ts` | `RobotState` union: `CHARGING_BATTERY`, `EMERGENCY` |

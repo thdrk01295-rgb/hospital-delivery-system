@@ -38,15 +38,19 @@ async def maybe_dispatch(db: Session) -> None:
         return
 
     # Fetch the next pending task by priority then creation time
+    # Skip tasks with no destination (destination is required per contract)
     task = (
         db.query(Task)
-        .filter(Task.status == TaskStatus.PENDING)
+        .filter(
+            Task.status == TaskStatus.PENDING,
+            Task.destination_location_id.isnot(None),
+        )
         .order_by(Task.priority.asc(), Task.created_at.asc())
         .first()
     )
 
     if not task:
-        logger.debug("No pending tasks to dispatch")
+        logger.debug("No pending tasks with a valid destination to dispatch")
         return
 
     # Mark as dispatched
@@ -70,10 +74,11 @@ def _publish_task_assignment(robot: Robot, task: Task) -> None:
     dest_code = task.destination_location.location_code if task.destination_location else None
 
     payload = {
+        "robot_id": robot.robot_code,
         "task_id": task.id,
         "task_type": task.task_type,
-        "origin": origin_code,
-        "destination": dest_code,
+        "origin": origin_code,    # location_code or null
+        "destination": dest_code, # location_code; non-null enforced by dispatch filter
         "priority": task.priority,
     }
     publish(mqtt_topics.SERVER_TASK_ASSIGN, payload)

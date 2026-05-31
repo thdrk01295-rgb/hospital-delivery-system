@@ -19,7 +19,7 @@ from app.services.task_service import (
 from app.services.abnormal_event_service import open_event, resolve_all_by_type
 from app.services.auth_service import decode_token
 from app.constants.enums import TaskType, TaskStatus
-from app.constants import ws_events
+from app.constants import ws_events, mqtt_topics
 from app.websocket.manager import ws_manager
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -34,6 +34,12 @@ def _get_token_payload(authorization: Optional[str]) -> dict:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
 
 
+def _publish_task_cancel(task_id: int, robot_code: str = "AMR-001") -> None:
+    """Publish server/task_cancel when the robot may already hold this task."""
+    from app.mqtt.client import publish
+    publish(mqtt_topics.SERVER_TASK_CANCEL, {"robot_id": robot_code, "task_id": task_id})
+
+
 # ── Nurse endpoints ──────────────────────────────────────────────────────────
 
 @router.post("/nurse/order", response_model=TaskRead, status_code=status.HTTP_201_CREATED)
@@ -46,6 +52,46 @@ async def create_order(
     if payload.get("role") != "nurse":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Nurses only")
     task = create_nurse_task(db, body, nurse_id=payload.get("sub", "nurse"))
+    task_dict = TaskRead.model_validate(task).model_dump(mode="json")
+    await ws_manager.broadcast(ws_events.TASK_STATUS_UPDATE, task_dict)
+    return task
+
+
+@router.post("/nurse/cancel/{task_id}", response_model=TaskRead)
+async def nurse_cancel_task(
+    task_id: int,
+    authorization: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    """
+    Nurse cancels any task by ID.
+    If the task is DISPATCHED or IN_PROGRESS (currently held by the robot),
+    publishes server/task_cancel so the robot cancels its navigation goal.
+    """
+    payload = _get_token_payload(authorization)
+    if payload.get("role") != "nurse":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Nurses only")
+
+    from app.models.task import Task
+    task = db.query(Task).filter(Task.id == task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task.status in (TaskStatus.COMPLETE, TaskStatus.CANCELLED, TaskStatus.FAILED):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Task is already in terminal status '{task.status}'",
+        )
+
+    robot_code = "AMR-001"
+    if task.status in (TaskStatus.DISPATCHED, TaskStatus.IN_PROGRESS):
+        if task.assigned_robot_id:
+            from app.models.robot import Robot as RobotModel
+            r = db.query(RobotModel).filter(RobotModel.id == task.assigned_robot_id).first()
+            if r:
+                robot_code = r.robot_code
+        _publish_task_cancel(task_id, robot_code)
+
+    task = update_task_status(db, task_id, TaskStatus.CANCELLED)
     task_dict = TaskRead.model_validate(task).model_dump(mode="json")
     await ws_manager.broadcast(ws_events.TASK_STATUS_UPDATE, task_dict)
     return task
@@ -87,7 +133,6 @@ async def trigger_emergency(
 
     # Notify robot: stop immediately
     from app.mqtt.client import publish
-    from app.constants import mqtt_topics
     publish(mqtt_topics.SERVER_EMERGENCY_CALL, {"robot_id": "AMR-001", "command": "STOP"})
 
     return task
@@ -105,7 +150,6 @@ async def release_emergency(
 
     # Notify robot: exit EMERGENCY, return to IDLE
     from app.mqtt.client import publish
-    from app.constants import mqtt_topics
     publish(mqtt_topics.SERVER_EMERGENCY_CALL, {"robot_id": "AMR-001", "command": "RELEASE"})
 
     # Cancel any remaining PENDING emergency_call tasks so they don't dispatch
@@ -177,7 +221,8 @@ async def patient_complete_task(
 ):
     """
     Called by the patient when they press the 완료 button in DELIVERY_OPEN_PAT state.
-    Marks the task COMPLETE and broadcasts task_status_update.
+    Marks the task COMPLETE, broadcasts task_status_update, then publishes
+    server/task_finish so the robot clears the matched patient task and returns to IDLE.
     """
     payload = _get_token_payload(authorization)
     if payload.get("role") != "patient":
@@ -185,7 +230,6 @@ async def patient_complete_task(
 
     bed_code = payload.get("bed_code")
 
-    # Verify the task belongs to this patient
     from app.models.task import Task
     task = db.query(Task).filter(Task.id == task_id).first()
     if not task:
@@ -197,9 +241,22 @@ async def patient_complete_task(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                             detail=f"Task cannot be completed from status '{task.status}'")
 
+    # Resolve robot_code before committing
+    robot_code = "AMR-001"
+    if task.assigned_robot_id:
+        from app.models.robot import Robot as RobotModel
+        r = db.query(RobotModel).filter(RobotModel.id == task.assigned_robot_id).first()
+        if r:
+            robot_code = r.robot_code
+
     task = update_task_status(db, task_id, TaskStatus.COMPLETE)
     task_dict = TaskRead.model_validate(task).model_dump(mode="json")
     await ws_manager.broadcast(ws_events.TASK_STATUS_UPDATE, task_dict)
+
+    # Signal robot to clear the matched patient task and publish IDLE
+    from app.mqtt.client import publish
+    publish(mqtt_topics.SERVER_TASK_FINISH, {"robot_id": robot_code, "task_id": task_id})
+
     return task
 
 
@@ -222,6 +279,16 @@ async def patient_cancel_task(
 
     if not task:
         raise HTTPException(status_code=404, detail="No active task to cancel")
+
+    # If robot may already hold this task, notify it to cancel
+    if task.status in (TaskStatus.DISPATCHED, TaskStatus.IN_PROGRESS):
+        robot_code = "AMR-001"
+        if task.assigned_robot_id:
+            from app.models.robot import Robot as RobotModel
+            r = db.query(RobotModel).filter(RobotModel.id == task.assigned_robot_id).first()
+            if r:
+                robot_code = r.robot_code
+        _publish_task_cancel(task.id, robot_code)
 
     task = update_task_status(db, task.id, TaskStatus.CANCELLED)
     task_dict = TaskRead.model_validate(task).model_dump(mode="json")

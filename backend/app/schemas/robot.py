@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from app.schemas.location import LocationRead
 
@@ -23,28 +23,37 @@ class RobotStatusRead(BaseModel):
 class MqttRobotStatusPayload(BaseModel):
     robot_id: str
     state: str
-    timestamp: datetime
+    task_id: Optional[int] = None
+    timestamp: Optional[datetime] = None
 
 
 class MqttRobotLocationPayload(BaseModel):
     robot_id: str
     location_code: str
-    timestamp: datetime
+    timestamp: Optional[datetime] = None
 
 
 class MqttRobotBatteryPayload(BaseModel):
     robot_id: str
     battery_percent: float
-    timestamp: datetime
+    timestamp: Optional[datetime] = None
 
 
 class MqttRobotErrorPayload(BaseModel):
     robot_id: str
-    error_message: str
-    timestamp: datetime
+    error_message: Optional[str] = None  # final standard field
+    error: Optional[str] = None           # fallback for older robot clients
+    task_id: Optional[int] = None
+    timestamp: Optional[datetime] = None
+
+    @model_validator(mode="after")
+    def resolve_error_message(self) -> "MqttRobotErrorPayload":
+        if not self.error_message:
+            self.error_message = self.error or "Unknown error"
+        return self
 
 
 class MqttTaskCompletePayload(BaseModel):
     robot_id: str
     task_id: int
-    timestamp: datetime
+    timestamp: Optional[datetime] = None
