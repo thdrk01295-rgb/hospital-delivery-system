@@ -14,6 +14,7 @@ from app.services.task_service import (
     get_completed_tasks,
     create_emergency_task,
     update_task_status,
+    requeue_task,
 )
 from app.services.abnormal_event_service import open_event, resolve_all_by_type
 from app.services.auth_service import decode_token
@@ -61,7 +62,8 @@ async def trigger_emergency(
 
     task = create_emergency_task(db)
 
-    # Cancel only the currently active task (DISPATCHED or IN_PROGRESS)
+    # Reset the currently active task (DISPATCHED or IN_PROGRESS) back to PENDING
+    # so it can be re-dispatched after emergency is released
     from app.models.task import Task as TaskModel
     active_task = (
         db.query(TaskModel)
@@ -70,9 +72,9 @@ async def trigger_emergency(
         .first()
     )
     if active_task:
-        active_task = update_task_status(db, active_task.id, TaskStatus.CANCELLED)
-        cancelled_dict = TaskRead.model_validate(active_task).model_dump(mode="json")
-        await ws_manager.broadcast(ws_events.TASK_STATUS_UPDATE, cancelled_dict)
+        active_task = requeue_task(db, active_task.id)
+        requeued_dict = TaskRead.model_validate(active_task).model_dump(mode="json")
+        await ws_manager.broadcast(ws_events.TASK_STATUS_UPDATE, requeued_dict)
 
     # Open abnormal event for the emergency call
     event = open_event(db, "emergency_call", related_task_id=task.id,

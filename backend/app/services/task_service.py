@@ -120,6 +120,20 @@ def update_task_status(db: Session, task_id: int, status: TaskStatus,
     return task
 
 
+def requeue_task(db: Session, task_id: int) -> Optional[Task]:
+    """Resets a DISPATCHED or IN_PROGRESS task back to PENDING for re-dispatch after emergency."""
+    task = db.query(Task).filter(Task.id == task_id).first()
+    if not task:
+        return None
+    task.status = TaskStatus.PENDING
+    task.assigned_robot_id = None
+    task.started_at = None
+    db.commit()
+    db.refresh(task)
+    return task
+    return task
+
+
 def create_emergency_task(db: Session) -> Task:
     task = Task(
         task_type=TaskType.EMERGENCY_CALL,
