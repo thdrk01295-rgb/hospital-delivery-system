@@ -21,7 +21,12 @@ class NurseOrderCreate(BaseModel):
 
     @model_validator(mode="after")
     def check_locations(self) -> "NurseOrderCreate":
-        if self.task_type not in (TaskType.EMERGENCY_CALL, TaskType.BATTERY_LOW):
+        # BATTERY_LOW is system-internal only — never user-creatable
+        if self.task_type == TaskType.BATTERY_LOW:
+            raise ValueError(
+                "battery_low is a system-internal task type and cannot be created manually"
+            )
+        if self.task_type != TaskType.EMERGENCY_CALL:
             if not self.destination_location_id:
                 raise ValueError("destination_location_id is required for this task type")
         return self

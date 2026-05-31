@@ -70,14 +70,24 @@ def _handle_robot_status(raw: dict) -> None:
         # Low-battery handling (event + task requeue + station-return dispatch)
         # is now driven entirely by robot/battery with battery_percent <= threshold.
 
-        # Robot returned to IDLE → resolve open error / low_battery events and dispatch
+        # Robot returned to IDLE → resolve open error events and dispatch.
+        # low_battery is NOT resolved here; it resolves only when battery recovers
+        # above threshold (see _handle_robot_battery / _handle_battery_recovery).
         if data.state == RobotState.IDLE:
-            for etype in ("error", "low_battery"):
-                resolved = resolve_all_by_type(db, etype)
-                if resolved:
+            from app.config.settings import settings
+            resolved_err = resolve_all_by_type(db, "error")
+            if resolved_err:
+                _schedule(ws_manager.broadcast(
+                    ws_events.ABNORMAL_EVENT_UPDATE,
+                    {"event_type": "error", "active": False},
+                ))
+            # Only resolve low_battery if battery has actually recovered
+            if robot.battery_percent > settings.LOW_BATTERY_THRESHOLD:
+                resolved_lb = resolve_all_by_type(db, "low_battery")
+                if resolved_lb:
                     _schedule(ws_manager.broadcast(
                         ws_events.ABNORMAL_EVENT_UPDATE,
-                        {"event_type": etype, "active": False},
+                        {"event_type": "low_battery", "active": False},
                     ))
             _schedule(maybe_dispatch(db))
     finally:
@@ -119,6 +129,8 @@ def _handle_robot_battery(raw: dict) -> None:
 
         if data.battery_percent <= settings.LOW_BATTERY_THRESHOLD:
             _handle_low_battery(db, robot)
+        else:
+            _handle_battery_recovery(db, robot)
     finally:
         db.close()
 
@@ -220,6 +232,31 @@ def _handle_low_battery(db, robot) -> None:
     task_dict = TR.model_validate(return_task).model_dump(mode="json")
     _schedule(ws_manager.broadcast(ws_events.TASK_STATUS_UPDATE, task_dict))
     logger.info(f"Low-battery station-return task {return_task.id} dispatched to {station.location_code}")
+
+
+def _handle_battery_recovery(db, robot) -> None:
+    """
+    Called when battery_percent rises above LOW_BATTERY_THRESHOLD.
+    Resolves the open low_battery event (if any) and triggers dispatch when robot is IDLE.
+    This is the authoritative low_battery event resolver — not robot/status IDLE alone.
+    """
+    from app.services.abnormal_event_service import resolve_all_by_type
+    from app.services.robot_service import get_robot_status_dict
+    from app.websocket.manager import ws_manager
+    from app.scheduler.dispatcher import maybe_dispatch
+
+    resolved = resolve_all_by_type(db, "low_battery")
+    if not resolved:
+        return
+
+    _schedule(ws_manager.broadcast(
+        ws_events.ABNORMAL_EVENT_UPDATE,
+        {"event_type": "low_battery", "active": False},
+    ))
+    logger.info(f"Low-battery event resolved; battery={robot.battery_percent:.1f}%")
+
+    if robot.current_state == RobotState.IDLE:
+        _schedule(maybe_dispatch(db))
 
 
 def _handle_robot_error(raw: dict) -> None:

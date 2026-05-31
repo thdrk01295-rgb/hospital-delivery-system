@@ -37,6 +37,21 @@ async def maybe_dispatch(db: Session) -> None:
         logger.debug(f"Robot not available for dispatch (state={robot.current_state})")
         return
 
+    # Extra guard: don't dispatch normal tasks while a low_battery event is open.
+    # Handles the edge case where robot sends IDLE before battery recovers above threshold.
+    from app.models.abnormal_event import AbnormalEvent
+    active_low_bat = (
+        db.query(AbnormalEvent)
+        .filter(
+            AbnormalEvent.event_type == "low_battery",
+            AbnormalEvent.resolved_at.is_(None),
+        )
+        .first()
+    )
+    if active_low_bat:
+        logger.debug("Low-battery event active — skipping normal task dispatch")
+        return
+
     # Fetch the next pending task by priority then creation time
     # Skip tasks with no destination (destination is required per contract)
     task = (

@@ -21,14 +21,13 @@ const ORDER_TYPES: { value: TaskType; label: string }[] = [
   { value: 'specimen_delivery',       label: '검체 배송 (Specimen Delivery)' },
   { value: 'logistics_delivery',      label: '물류 배송 (Logistics Delivery)' },
   { value: 'used_clothes_collection', label: '사용 의류 수거 (Used Clothes Collection)' },
-  { value: 'battery_low',             label: '배터리 부족 (Battery Low)' },
 ]
 
 // Nurse logistics task types that carry clothing quantity fields
 const CLOTHES_TYPES: TaskType[] = ['clothes_refill', 'used_clothes_collection']
 
-// Task types that do NOT require a destination (system/autonomous tasks)
-const NO_DEST_REQUIRED: TaskType[] = ['emergency_call', 'battery_low']
+// Task types that do NOT require a destination
+const NO_DEST_REQUIRED: TaskType[] = ['emergency_call']
 
 type LocMode = 'fixed' | 'bed'
 
