@@ -115,6 +115,23 @@ bool requireStringField(
   return true;
 }
 
+bool requireNullableStringField(
+  const rclcpp::Logger & logger,
+  const std::string & source,
+  const json & payload,
+  const char * field)
+{
+  if (!payload.contains(field)) {
+    RCLCPP_ERROR(logger, "%s payload missing required %s", source.c_str(), field);
+    return false;
+  }
+  if (!payload[field].is_null() && !payload[field].is_string()) {
+    RCLCPP_ERROR(logger, "%s payload %s must be a string or null", source.c_str(), field);
+    return false;
+  }
+  return true;
+}
+
 bool requireNonEmptyStringField(
   const rclcpp::Logger & logger,
   const std::string & source,
@@ -255,7 +272,7 @@ void MqttBridgeNode::onMqttMessage(const std::string & t, const std::string & pa
   if (t == topic::TASK_ASSIGN) {
     if (!requireIntegerField(get_logger(), t, parsed, "task_id") ||
       !requireStringField(get_logger(), t, parsed, "task_type") ||
-      !requireStringField(get_logger(), t, parsed, "origin") ||
+      !requireNullableStringField(get_logger(), t, parsed, "origin") ||
       !requireNonEmptyStringField(get_logger(), t, parsed, "destination") ||
       !requireIntegerField(get_logger(), t, parsed, "priority"))
     {

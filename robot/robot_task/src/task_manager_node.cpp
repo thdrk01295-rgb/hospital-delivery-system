@@ -148,6 +148,11 @@ void TaskManagerNode::on_task_assign(const std_msgs::msg::String::SharedPtr msg)
     publish_error("task_assign: empty task_type");
     return;
   }
+  if (!is_supported_task_type(task.task_type)) {
+    RCLCPP_ERROR(get_logger(), "task_assign: unsupported task_type=%s", task.task_type.c_str());
+    publish_error("task_assign: unsupported task_type");
+    return;
+  }
 
   // ── Validate destination ────────────────────────────────
   if (task.destination.empty()) {
@@ -844,6 +849,18 @@ bool TaskManagerNode::is_patient_task() const
   return active_task_ &&
     (active_task_->task_type == "patient_clothes_rental" ||
     active_task_->task_type == "patient_clothes_return");
+}
+
+bool TaskManagerNode::is_supported_task_type(const std::string & task_type) const
+{
+  return task_type == "specimen_delivery" ||
+    task_type == "kit_delivery" ||
+    task_type == "logistics_delivery" ||
+    task_type == "clothes_refill" ||
+    task_type == "used_clothes_collection" ||
+    task_type == "patient_clothes_rental" ||
+    task_type == "patient_clothes_return" ||
+    task_type == "battery_low";
 }
 
 // ============================================================

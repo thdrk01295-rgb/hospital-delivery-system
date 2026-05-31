@@ -121,6 +121,7 @@ private:
   void enter_emergency();
   void reset_to_idle();
   bool is_patient_task() const;
+  bool is_supported_task_type(const std::string & task_type) const;
 
   static std::string state_to_string(TaskState s);
   std::string state_to_robot_state(TaskState s) const;
