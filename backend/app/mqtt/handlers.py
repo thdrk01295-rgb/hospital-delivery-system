@@ -121,6 +121,7 @@ def _handle_robot_battery(raw: dict) -> None:
     from app.config.settings import settings
 
     data = MqttRobotBatteryPayload(**raw)
+    logger.info(f"[robot/battery] robot={data.robot_id} battery={data.battery_percent:.1f}%")
     db = SessionLocal()
     try:
         robot = update_robot_battery(db, data.robot_id, data.battery_percent)
@@ -128,6 +129,10 @@ def _handle_robot_battery(raw: dict) -> None:
         _schedule(ws_manager.broadcast(ws_events.ROBOT_BATTERY_UPDATE, status_dict))
 
         if data.battery_percent <= settings.LOW_BATTERY_THRESHOLD:
+            logger.warning(
+                f"[LOW BATTERY] Detected: robot={data.robot_id} "
+                f"battery={data.battery_percent:.1f}% (<= threshold {settings.LOW_BATTERY_THRESHOLD}%)"
+            )
             _handle_low_battery(db, robot)
         else:
             _handle_battery_recovery(db, robot)
@@ -162,10 +167,16 @@ def _handle_low_battery(db, robot) -> None:
         robot.last_seen_at = datetime.now(timezone.utc)
         db.commit()
         db.refresh(robot)
+        logger.info(f"[LOW BATTERY] Robot {robot.robot_code} state → LOW_BATTERY")
         _schedule(ws_manager.broadcast(ws_events.ROBOT_STATE_UPDATE, get_robot_status_dict(robot)))
+    else:
+        logger.debug(
+            f"[LOW BATTERY] Robot {robot.robot_code} already in {robot.current_state} — skipping state update"
+        )
 
-    # --- 2. Open low_battery event (idempotent) ---
+    # --- 2. Open low_battery event (idempotent — returns existing if already open) ---
     event = open_event(db, "low_battery", note=f"Battery at {robot.battery_percent:.1f}%")
+    logger.info(f"[LOW BATTERY] Abnormal event id={event.id} active (open or pre-existing)")
     _schedule(ws_manager.broadcast(
         ws_events.ABNORMAL_EVENT_UPDATE,
         {"event_type": "low_battery", "event_id": event.id, "active": True},
@@ -181,11 +192,23 @@ def _handle_low_battery(db, robot) -> None:
         .first()
     )
     if active_task:
+        logger.info(
+            f"[LOW BATTERY] Active task found: task_id={active_task.id} "
+            f"status={active_task.status} — publishing server/task_cancel"
+        )
         publish(mqtt_topics.SERVER_TASK_CANCEL, {"robot_id": robot.robot_code, "task_id": active_task.id})
+        logger.info(
+            f"[LOW BATTERY] Published server/task_cancel: robot={robot.robot_code}, task_id={active_task.id}"
+        )
         requeued = requeue_task(db, active_task.id)
         if requeued:
+            logger.info(f"[LOW BATTERY] Task {active_task.id} requeued to PENDING")
             task_dict = TaskRead.model_validate(requeued).model_dump(mode="json")
             _schedule(ws_manager.broadcast(ws_events.TASK_STATUS_UPDATE, task_dict))
+    else:
+        logger.info(
+            f"[LOW BATTERY] No active task on robot {robot.robot_code} — skipping server/task_cancel"
+        )
 
     # --- 4. Dispatch station-return task (idempotent: skip if already exists) ---
     existing_return = (
@@ -197,11 +220,17 @@ def _handle_low_battery(db, robot) -> None:
         .first()
     )
     if existing_return:
+        logger.info(
+            f"[LOW BATTERY] Station-return task already active "
+            f"(task_id={existing_return.id}, status={existing_return.status}) — skipping duplicate"
+        )
         return
 
     station = db.query(Location).filter(Location.location_code == "STATION-01").first()
     if not station:
-        logger.warning("STATION-01 not found in locations table — cannot dispatch low-battery station-return task")
+        logger.warning(
+            "[LOW BATTERY] STATION-01 not found in locations table — cannot dispatch station-return task"
+        )
         return
 
     return_task = Task(
@@ -219,19 +248,24 @@ def _handle_low_battery(db, robot) -> None:
     db.refresh(return_task)
 
     origin_code = return_task.origin_location.location_code if return_task.origin_location else None
-    publish(mqtt_topics.SERVER_TASK_ASSIGN, {
+    assign_payload = {
         "robot_id": robot.robot_code,
         "task_id": return_task.id,
         "task_type": return_task.task_type,
         "origin": origin_code,
         "destination": station.location_code,
         "priority": return_task.priority,
-    })
+    }
+    publish(mqtt_topics.SERVER_TASK_ASSIGN, assign_payload)
+    logger.info(
+        f"[LOW BATTERY] Published server/task_assign: robot={robot.robot_code}, "
+        f"task_id={return_task.id}, task_type=battery_low, "
+        f"destination={station.location_code}, priority={return_task.priority}"
+    )
 
     from app.schemas.task import TaskRead as TR
     task_dict = TR.model_validate(return_task).model_dump(mode="json")
     _schedule(ws_manager.broadcast(ws_events.TASK_STATUS_UPDATE, task_dict))
-    logger.info(f"Low-battery station-return task {return_task.id} dispatched to {station.location_code}")
 
 
 def _handle_battery_recovery(db, robot) -> None:
@@ -249,13 +283,17 @@ def _handle_battery_recovery(db, robot) -> None:
     if not resolved:
         return
 
+    logger.info(
+        f"[BATTERY RECOVERY] robot={robot.robot_code} battery={robot.battery_percent:.1f}% "
+        f"— low_battery event resolved (ids={[e.id for e in resolved]})"
+    )
     _schedule(ws_manager.broadcast(
         ws_events.ABNORMAL_EVENT_UPDATE,
         {"event_type": "low_battery", "active": False},
     ))
-    logger.info(f"Low-battery event resolved; battery={robot.battery_percent:.1f}%")
 
     if robot.current_state == RobotState.IDLE:
+        logger.info(f"[BATTERY RECOVERY] Robot {robot.robot_code} is IDLE — triggering dispatch")
         _schedule(maybe_dispatch(db))
 
 
