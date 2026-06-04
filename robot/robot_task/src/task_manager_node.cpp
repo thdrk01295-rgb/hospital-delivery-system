@@ -624,6 +624,12 @@ void TaskManagerNode::transition_to(TaskState next)
 
     case TaskState::AT_DESTINATION:
       publish_location_code(active_task_->destination);
+      if (is_battery_low_task()) {
+        RCLCPP_INFO(get_logger(),
+          "AT_DESTINATION — battery_low task completes without unloading");
+        transition_to(TaskState::TASK_COMPLETE);
+        break;
+      }
 #ifndef USE_NFC_TRIGGER
       if (is_patient_task()) {
         waiting_patient_finish_ = true;
@@ -885,6 +891,11 @@ bool TaskManagerNode::is_patient_task() const
   return active_task_ &&
     (active_task_->task_type == "patient_clothes_rental" ||
     active_task_->task_type == "patient_clothes_return");
+}
+
+bool TaskManagerNode::is_battery_low_task() const
+{
+  return active_task_ && active_task_->task_type == "battery_low";
 }
 
 bool TaskManagerNode::is_supported_task_type(const std::string & task_type) const
