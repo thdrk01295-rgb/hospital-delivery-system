@@ -104,6 +104,8 @@ void TaskManagerNode::on_task_assign(const std_msgs::msg::String::SharedPtr msg)
     return;
   }
 
+  clear_task_context();
+
   // ── Parse JSON ──────────────────────────────────────────
   ActiveTask task;
   try {
@@ -301,6 +303,7 @@ void TaskManagerNode::on_task_finish(const std_msgs::msg::String::SharedPtr msg)
   RCLCPP_INFO(get_logger(),
     "Patient task_finish accepted — task_id=%d resetting to IDLE",
     active_task_->task_id);
+  waiting_patient_finish_ = false;
   reset_to_idle();
 }
 
@@ -392,11 +395,24 @@ void TaskManagerNode::on_nav_result(const std_msgs::msg::String::SharedPtr msg)
     return;
   }
 
-  if (!result_task_id || *result_task_id != active_task_->task_id) {
+  if (!navigation_in_progress_ || !navigation_task_id_) {
     RCLCPP_WARN(get_logger(),
-      "Stale navigation_result ignored: got task_id=%s active task_id=%d",
+      "navigation_result received without active navigation — ignored");
+    return;
+  }
+
+  if (!result_task_id || *result_task_id != *navigation_task_id_) {
+    RCLCPP_WARN(get_logger(),
+      "Stale navigation_result ignored: got task_id=%s navigation task_id=%d",
       result_task_id ? std::to_string(*result_task_id).c_str() : "null",
-      active_task_->task_id);
+      *navigation_task_id_);
+    return;
+  }
+
+  if (*result_task_id != active_task_->task_id) {
+    RCLCPP_WARN(get_logger(),
+      "Stale navigation_result ignored: got task_id=%d active task_id=%d",
+      *result_task_id, active_task_->task_id);
     return;
   }
 
@@ -418,14 +434,15 @@ void TaskManagerNode::on_nav_result(const std_msgs::msg::String::SharedPtr msg)
     return;
   }
 
-  if (phase != expected_phase) {
+  if (phase != expected_phase || phase != navigation_phase_) {
     RCLCPP_WARN(get_logger(),
-      "Stale navigation_result ignored: phase=%s expected=%s",
-      phase.c_str(), expected_phase.c_str());
+      "Stale navigation_result ignored: phase=%s expected=%s navigation_phase=%s",
+      phase.c_str(), expected_phase.c_str(), navigation_phase_.c_str());
     return;
   }
 
   stop_navigation_timeout();
+  clear_navigation_context();
 
   if (result == "FAILURE") {
     RCLCPP_ERROR(get_logger(), "Navigation FAILED in state: %s",
@@ -609,6 +626,7 @@ void TaskManagerNode::transition_to(TaskState next)
       publish_location_code(active_task_->destination);
 #ifndef USE_NFC_TRIGGER
       if (is_patient_task()) {
+        waiting_patient_finish_ = true;
         RCLCPP_INFO(get_logger(),
           "AT_DESTINATION — patient task waits for server task_finish after unload opens");
       } else {
@@ -620,6 +638,7 @@ void TaskManagerNode::transition_to(TaskState next)
       }
 #else
       if (is_patient_task()) {
+        waiting_patient_finish_ = true;
         RCLCPP_INFO(get_logger(),
           "AT_DESTINATION — patient task waits for server task_finish after unload opens");
       } else {
@@ -687,6 +706,9 @@ void TaskManagerNode::send_nav_goal(const std::string & code, const std::string 
 
   auto out = std_msgs::msg::String{};
   out.data = j.dump();
+  navigation_task_id_ = active_task_ ? std::optional<int>(active_task_->task_id) : std::nullopt;
+  navigation_phase_ = phase;
+  navigation_in_progress_ = true;
   pub_nav_goal_->publish(out);
 
   RCLCPP_INFO(get_logger(),
@@ -733,6 +755,13 @@ void TaskManagerNode::stop_navigation_timeout()
     navigation_timeout_timer_->cancel();
     navigation_timeout_timer_.reset();
   }
+}
+
+void TaskManagerNode::clear_navigation_context()
+{
+  navigation_in_progress_ = false;
+  navigation_task_id_.reset();
+  navigation_phase_.clear();
 }
 
 void TaskManagerNode::publish_task_state()
@@ -821,13 +850,13 @@ void TaskManagerNode::enter_emergency()
   stop_navigation_timeout();
   publish_nav_cancel(task_id);
   publish_stop_command();
-  active_task_.reset();
+  clear_task_context();
   state_ = TaskState::EMERGENCY;
   publish_task_state();
   RCLCPP_ERROR(get_logger(), "Emergency STOP applied");
 }
 
-void TaskManagerNode::reset_to_idle()
+void TaskManagerNode::clear_task_context()
 {
   if (loading_timer_) {
     loading_timer_->cancel();
@@ -838,7 +867,14 @@ void TaskManagerNode::reset_to_idle()
     unloading_timer_.reset();
   }
   stop_navigation_timeout();
+  clear_navigation_context();
+  waiting_patient_finish_ = false;
   active_task_.reset();
+}
+
+void TaskManagerNode::reset_to_idle()
+{
+  clear_task_context();
   state_ = TaskState::IDLE;
   publish_task_state();
   RCLCPP_INFO(get_logger(), "Reset to IDLE");

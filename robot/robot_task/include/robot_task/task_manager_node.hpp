@@ -90,6 +90,10 @@ private:
   std::recursive_mutex       state_mutex_;
   double                    navigation_timeout_sec_{300.0};
   std::string               robot_id_{"AMR-001"};
+  std::optional<int>         navigation_task_id_;
+  std::string               navigation_phase_;
+  bool                      navigation_in_progress_{false};
+  bool                      waiting_patient_finish_{false};
 
   // ── Callbacks ───────────────────────────────────────────
   void on_task_assign(const std_msgs::msg::String::SharedPtr msg);
@@ -119,6 +123,8 @@ private:
   void publish_error(const std::string & message);
   void enter_error(const std::string & message);
   void enter_emergency();
+  void clear_task_context();
+  void clear_navigation_context();
   void reset_to_idle();
   bool is_patient_task() const;
   bool is_supported_task_type(const std::string & task_type) const;
