@@ -54,6 +54,9 @@ async def create_order(
     task = create_nurse_task(db, body, nurse_id=payload.get("sub", "nurse"))
     task_dict = TaskRead.model_validate(task).model_dump(mode="json")
     await ws_manager.broadcast(ws_events.TASK_STATUS_UPDATE, task_dict)
+    # Trigger dispatch in case the robot is already IDLE when the order is created
+    from app.scheduler.dispatcher import maybe_dispatch
+    asyncio.create_task(maybe_dispatch())
     return task
 
 

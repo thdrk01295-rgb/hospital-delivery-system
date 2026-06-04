@@ -11,12 +11,9 @@ Priority rules (lower number = higher priority):
   6 — patient clothes rental / return
   7 — used_clothes_collection
 """
-import json
 import logging
 
-from sqlalchemy.orm import Session
-
-from app.constants.enums import TaskStatus, BLOCKING_ROBOT_STATES, ABNORMAL_ROBOT_STATES
+from app.constants.enums import TaskStatus, BLOCKING_ROBOT_STATES
 from app.constants import mqtt_topics
 from app.models.task import Task
 from app.models.robot import Robot
@@ -24,62 +21,76 @@ from app.models.robot import Robot
 logger = logging.getLogger(__name__)
 
 
-async def maybe_dispatch(db: Session) -> None:
+async def maybe_dispatch() -> None:
     """
     Selects the highest-priority PENDING task and dispatches it to the robot if available.
-    This is an async function so it can be scheduled on the event loop from the MQTT thread.
+
+    Creates its own DB session so it is safe to call from the asyncio event loop, from
+    MQTT callbacks (via run_coroutine_threadsafe), or directly from HTTP endpoints.
+    Never shares a session with the caller — avoids the closed-session threading bug.
     """
-    robot = db.query(Robot).first()
-    if not robot:
-        return
-
-    if robot.current_state in BLOCKING_ROBOT_STATES:
-        logger.debug(f"Robot not available for dispatch (state={robot.current_state})")
-        return
-
-    # Extra guard: don't dispatch normal tasks while a low_battery event is open.
-    # Handles the edge case where robot sends IDLE before battery recovers above threshold.
+    from app.db.session import SessionLocal
     from app.models.abnormal_event import AbnormalEvent
-    active_low_bat = (
-        db.query(AbnormalEvent)
-        .filter(
-            AbnormalEvent.event_type == "low_battery",
-            AbnormalEvent.resolved_at.is_(None),
+
+    db = SessionLocal()
+    try:
+        robot = db.query(Robot).first()
+        if not robot:
+            logger.info("[dispatch] Skip — no robot row in DB")
+            return
+
+        if robot.current_state in BLOCKING_ROBOT_STATES:
+            logger.info(f"[dispatch] Skip — robot state={robot.current_state} (blocking)")
+            return
+
+        # Don't dispatch normal tasks while a low_battery event is unresolved.
+        # Guards the edge case where the robot sends IDLE before battery recovers.
+        active_low_bat = (
+            db.query(AbnormalEvent)
+            .filter(
+                AbnormalEvent.event_type == "low_battery",
+                AbnormalEvent.resolved_at.is_(None),
+            )
+            .first()
         )
-        .first()
-    )
-    if active_low_bat:
-        logger.debug("Low-battery event active — skipping normal task dispatch")
-        return
+        if active_low_bat:
+            logger.info(f"[dispatch] Skip — unresolved low_battery event (id={active_low_bat.id})")
+            return
 
-    # Fetch the next pending task by priority then creation time
-    # Skip tasks with no destination (destination is required per contract)
-    task = (
-        db.query(Task)
-        .filter(
-            Task.status == TaskStatus.PENDING,
-            Task.destination_location_id.isnot(None),
+        task = (
+            db.query(Task)
+            .filter(
+                Task.status == TaskStatus.PENDING,
+                Task.destination_location_id.isnot(None),
+            )
+            .order_by(Task.priority.asc(), Task.created_at.asc())
+            .first()
         )
-        .order_by(Task.priority.asc(), Task.created_at.asc())
-        .first()
-    )
 
-    if not task:
-        logger.debug("No pending tasks with a valid destination to dispatch")
-        return
+        if not task:
+            logger.info("[dispatch] Skip — no PENDING tasks with a valid destination")
+            return
 
-    # Mark as dispatched
-    task.status = TaskStatus.DISPATCHED
-    task.assigned_robot_id = robot.id
-    db.commit()
+        logger.info(
+            f"[dispatch] Selecting task_id={task.id} type={task.task_type} "
+            f"priority={task.priority} dest_id={task.destination_location_id}"
+        )
 
-    # Publish task assignment to MQTT
-    _publish_task_assignment(robot, task)
+        task.status = TaskStatus.DISPATCHED
+        task.assigned_robot_id = robot.id
+        db.commit()
 
-    # Broadcast task update over WebSocket
-    await _broadcast_task_update(task)
+        _publish_task_assignment(robot, task)
+        await _broadcast_task_update(task)
 
-    logger.info(f"Dispatched task {task.id} ({task.task_type}) to robot {robot.robot_code}")
+        logger.info(
+            f"[dispatch] Published server/task_assign: task_id={task.id} "
+            f"type={task.task_type} robot={robot.robot_code}"
+        )
+    except Exception:
+        logger.exception("[dispatch] Unexpected error in maybe_dispatch")
+    finally:
+        db.close()
 
 
 def _publish_task_assignment(robot: Robot, task: Task) -> None:

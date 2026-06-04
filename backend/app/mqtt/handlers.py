@@ -28,9 +28,21 @@ def set_event_loop(loop: asyncio.AbstractEventLoop) -> None:
     _loop = loop
 
 
+def _log_future_exception(future) -> None:
+    """Callback for run_coroutine_threadsafe futures — logs any unhandled exceptions."""
+    try:
+        exc = future.exception()
+        if exc:
+            logger.error(f"Scheduled coroutine raised an exception: {exc}", exc_info=exc)
+    except Exception:
+        pass  # future was cancelled or not done; ignore
+
+
 def _schedule(coro):
     if _loop:
-        asyncio.run_coroutine_threadsafe(coro, _loop)
+        asyncio.run_coroutine_threadsafe(coro, _loop).add_done_callback(_log_future_exception)
+    else:
+        logger.warning("_schedule called before event loop was set — coroutine dropped")
 
 
 def dispatch_message(topic: str, payload: dict) -> None:
@@ -89,7 +101,7 @@ def _handle_robot_status(raw: dict) -> None:
                         ws_events.ABNORMAL_EVENT_UPDATE,
                         {"event_type": "low_battery", "active": False},
                     ))
-            _schedule(maybe_dispatch(db))
+            _schedule(maybe_dispatch())
     finally:
         db.close()
 
@@ -294,7 +306,7 @@ def _handle_battery_recovery(db, robot) -> None:
 
     if robot.current_state == RobotState.IDLE:
         logger.info(f"[BATTERY RECOVERY] Robot {robot.robot_code} is IDLE — triggering dispatch")
-        _schedule(maybe_dispatch(db))
+        _schedule(maybe_dispatch())
 
 
 def _handle_robot_error(raw: dict) -> None:

@@ -63,7 +63,7 @@ async def on_startup():
         logger.warning(f"Location seeding skipped: {exc}")
 
     logger.info("Starting MQTT client...")
-    set_event_loop(asyncio.get_event_loop())
+    set_event_loop(asyncio.get_running_loop())
     start_mqtt()
 
     logger.info("Hospital AMR backend is ready.")
