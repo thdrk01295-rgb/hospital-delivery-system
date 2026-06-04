@@ -1,7 +1,9 @@
 #ifndef SERVER_BRIDGE__MQTT_BRIDGE_NODE_HPP_
 #define SERVER_BRIDGE__MQTT_BRIDGE_NODE_HPP_
 
+#include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <nlohmann/json.hpp>
 #include "rclcpp/rclcpp.hpp"
@@ -34,6 +36,9 @@ private:
   std::string robot_id_;
   std::string broker_uri_;
   int qos_;
+  bool has_last_status_{false};
+  std::string last_status_state_;
+  std::optional<int64_t> last_status_task_id_;
 
   std::unique_ptr<MqttClient> mqtt_client_;
 

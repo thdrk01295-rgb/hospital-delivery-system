@@ -1,5 +1,6 @@
 #include "server_bridge/mqtt_bridge_node.hpp"
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <string>
 
 using json = nlohmann::json;
@@ -318,6 +319,28 @@ void MqttBridgeNode::onTaskState(const std_msgs::msg::String::SharedPtr msg)
     RCLCPP_ERROR(get_logger(), "/robot/task_state JSON missing string field 'state'");
     return;
   }
+  const auto current_state = in["state"].get<std::string>();
+
+  std::optional<int64_t> current_task_id;
+  if (in.contains("task_id") && !in["task_id"].is_null()) {
+    if (!isInteger(in["task_id"])) {
+      RCLCPP_ERROR(get_logger(), "/robot/task_state payload task_id must be an integer");
+      return;
+    }
+    current_task_id = in["task_id"].get<int64_t>();
+  }
+
+  if (has_last_status_ &&
+    current_state == last_status_state_ &&
+    current_task_id == last_status_task_id_)
+  {
+    RCLCPP_DEBUG(
+      get_logger(),
+      "Duplicate robot/status skipped: state=%s task_id=%s",
+      current_state.c_str(),
+      current_task_id ? std::to_string(*current_task_id).c_str() : "null");
+    return;
+  }
 
   json out;
   out["robot_id"] = robot_id_;
@@ -328,7 +351,11 @@ void MqttBridgeNode::onTaskState(const std_msgs::msg::String::SharedPtr msg)
   if (in.contains("timestamp") && !in["timestamp"].is_null()) {
     out["timestamp"] = in["timestamp"];
   }
-  publishMqtt(topic::STATUS, out);
+  if (publishMqtt(topic::STATUS, out)) {
+    has_last_status_ = true;
+    last_status_state_ = current_state;
+    last_status_task_id_ = current_task_id;
+  }
 }
 
 void MqttBridgeNode::onBatteryState(const std_msgs::msg::Float32::SharedPtr msg)
