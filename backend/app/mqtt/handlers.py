@@ -218,12 +218,15 @@ def _handle_low_battery(db, robot) -> None:
         {"event_type": "low_battery", "event_id": event.id, "active": True},
     ))
 
-    # --- 3. Requeue any active task assigned to this robot ---
+    # --- 3. Requeue any active non-battery_low task assigned to this robot ---
+    # Exclude BATTERY_LOW: if the station-return task is already DISPATCHED/IN_PROGRESS
+    # we must leave it running, not cancel and requeue it.
     active_task = (
         db.query(Task)
         .filter(
             Task.status.in_([TaskStatus.DISPATCHED, TaskStatus.IN_PROGRESS]),
             Task.assigned_robot_id == robot.id,
+            Task.task_type != TaskType.BATTERY_LOW,
         )
         .first()
     )
