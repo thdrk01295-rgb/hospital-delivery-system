@@ -66,6 +66,7 @@ def _handle_robot_status(raw: dict) -> None:
     from app.services.abnormal_event_service import resolve_all_by_type
     from app.websocket.manager import ws_manager
     from app.scheduler.dispatcher import maybe_dispatch
+    from app.models.abnormal_event import AbnormalEvent
 
     # Temporary: normalize legacy misspelled value from older robot clients
     if raw.get("state") == "CHAGING_BATTERY":
@@ -74,6 +75,30 @@ def _handle_robot_status(raw: dict) -> None:
     data = MqttRobotStatusPayload(**raw)
     db = SessionLocal()
     try:
+        # States allowed to overwrite LOW_BATTERY regardless of active low_battery event
+        _LOW_BATTERY_PASSTHROUGH = {
+            RobotState.CHARGING_BATTERY,
+            RobotState.ERROR,
+            RobotState.EMERGENCY,
+            RobotState.IDLE,
+        }
+
+        if data.state not in _LOW_BATTERY_PASSTHROUGH:
+            active_low_bat = (
+                db.query(AbnormalEvent)
+                .filter(
+                    AbnormalEvent.event_type == "low_battery",
+                    AbnormalEvent.resolved_at.is_(None),
+                )
+                .first()
+            )
+            if active_low_bat:
+                logger.info(
+                    f"[robot/status] Ignored state {data.state} for robot {data.robot_id} "
+                    f"— low_battery event (id={active_low_bat.id}) is still active"
+                )
+                return
+
         robot = update_robot_state(db, data.robot_id, data.state)
         status_dict = get_robot_status_dict(robot)
         _schedule(ws_manager.broadcast(ws_events.ROBOT_STATE_UPDATE, status_dict))
