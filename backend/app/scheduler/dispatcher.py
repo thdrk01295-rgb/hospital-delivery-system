@@ -107,6 +107,7 @@ def _publish_task_assignment(robot: Robot, task: Task) -> None:
         "destination": dest_code, # location_code; non-null enforced by dispatch filter
         "priority": task.priority,
     }
+    logger.info(f"[dispatch] MQTT server/task_assign payload: {payload}")
     publish(mqtt_topics.SERVER_TASK_ASSIGN, payload)
 
 

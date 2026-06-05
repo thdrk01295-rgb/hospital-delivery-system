@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from app.db.session import SessionLocal
 from app.models.location import Location
 from app.constants.enums import LocationType
-from app.utils.location_utils import build_bed_code, NON_BED_DISPLAY
+from app.utils.location_utils import build_bed_code, NON_BED_DISPLAY, LOCATION_CODE_MAP
 
 
 def _generate_bed_locations() -> list[dict]:
@@ -42,7 +42,7 @@ def _generate_bed_locations() -> list[dict]:
 def _generate_non_bed_locations() -> list[dict]:
     return [
         {
-            "location_code": loc_type,
+            "location_code": LOCATION_CODE_MAP[loc_type],
             "location_type": loc_type,
             "floor": None,
             "room": None,

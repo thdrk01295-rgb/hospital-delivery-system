@@ -35,3 +35,15 @@ NON_BED_DISPLAY: dict[str, str] = {
     LocationType.EXAM_B:       "검사실 B",
     LocationType.EXAM_C:       "검사실 C",
 }
+
+# Canonical robot-facing location_code values for each non-bed location type.
+# These are the exact strings the robot expects in server/task_assign origin/destination fields.
+LOCATION_CODE_MAP: dict[str, str] = {
+    LocationType.STATION:      "STATION-01",
+    LocationType.LAUNDRY:      "LAUNDRY-01",
+    LocationType.WAREHOUSE:    "WAREHOUSE-01",
+    LocationType.SPECIMEN_LAB: "SPECIMEN-LAB",
+    LocationType.EXAM_A:       "EXAM-A",
+    LocationType.EXAM_B:       "EXAM-B",
+    LocationType.EXAM_C:       "EXAM-C",
+}

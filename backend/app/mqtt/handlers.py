@@ -268,6 +268,7 @@ def _handle_low_battery(db, robot) -> None:
         "destination": station.location_code,
         "priority": return_task.priority,
     }
+    logger.info(f"[LOW BATTERY] MQTT server/task_assign payload: {assign_payload}")
     publish(mqtt_topics.SERVER_TASK_ASSIGN, assign_payload)
     logger.info(
         f"[LOW BATTERY] Published server/task_assign: robot={robot.robot_code}, "
