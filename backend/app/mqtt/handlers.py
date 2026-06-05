@@ -166,7 +166,6 @@ def _handle_low_battery(db, robot) -> None:
     from app.models.task import Task
     from app.models.location import Location
     from app.services.abnormal_event_service import open_event
-    from app.services.task_service import requeue_task
     from app.services.robot_service import get_robot_status_dict
     from app.websocket.manager import ws_manager
     from app.constants.enums import TaskType, RequestedByRole
@@ -206,17 +205,21 @@ def _handle_low_battery(db, robot) -> None:
     if active_task:
         logger.info(
             f"[LOW BATTERY] Active task found: task_id={active_task.id} "
-            f"status={active_task.status} — publishing server/task_cancel"
+            f"status={active_task.status} type={active_task.task_type} — publishing server/task_cancel"
         )
-        publish(mqtt_topics.SERVER_TASK_CANCEL, {"robot_id": robot.robot_code, "task_id": active_task.id})
-        logger.info(
-            f"[LOW BATTERY] Published server/task_cancel: robot={robot.robot_code}, task_id={active_task.id}"
-        )
-        requeued = requeue_task(db, active_task.id)
-        if requeued:
-            logger.info(f"[LOW BATTERY] Task {active_task.id} requeued to PENDING")
-            task_dict = TaskRead.model_validate(requeued).model_dump(mode="json")
-            _schedule(ws_manager.broadcast(ws_events.TASK_STATUS_UPDATE, task_dict))
+        cancel_payload = {"robot_id": robot.robot_code, "task_id": active_task.id}
+        publish(mqtt_topics.SERVER_TASK_CANCEL, cancel_payload)
+        logger.info(f"[LOW BATTERY] Published server/task_cancel: {cancel_payload}")
+
+        # Inline requeue: reset to PENDING so it can be re-dispatched later
+        active_task.status = TaskStatus.PENDING
+        active_task.assigned_robot_id = None
+        active_task.started_at = None
+        db.commit()
+        db.refresh(active_task)
+        logger.info(f"[LOW BATTERY] Task {active_task.id} requeued to PENDING")
+        task_dict = TaskRead.model_validate(active_task).model_dump(mode="json")
+        _schedule(ws_manager.broadcast(ws_events.TASK_STATUS_UPDATE, task_dict))
     else:
         logger.info(
             f"[LOW BATTERY] No active task on robot {robot.robot_code} — skipping server/task_cancel"
@@ -276,8 +279,7 @@ def _handle_low_battery(db, robot) -> None:
         f"destination={station.location_code}, priority={return_task.priority}"
     )
 
-    from app.schemas.task import TaskRead as TR
-    task_dict = TR.model_validate(return_task).model_dump(mode="json")
+    task_dict = TaskRead.model_validate(return_task).model_dump(mode="json")
     _schedule(ws_manager.broadcast(ws_events.TASK_STATUS_UPDATE, task_dict))
 
 
