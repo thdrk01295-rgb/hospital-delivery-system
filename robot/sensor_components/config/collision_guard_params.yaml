@@ -1,0 +1,25 @@
+collision_guard_node:
+  ros__parameters:
+    input_cmd_topic: "/cmd_vel_smoothed"
+    output_cmd_topic: "/cmd_vel"
+    status_topic: "/tof/collision_guard_status"
+    front_left_topic: "/tof/front_left"
+    front_right_topic: "/tof/front_right"
+    rear_left_topic: "/tof/rear_left"
+    rear_right_topic: "/tof/rear_right"
+    min_range: 0.03
+    max_valid_range: 1.2
+    sentinel_invalid_range: 8.0
+    sensor_timeout_sec: 0.35
+    status_publish_period_sec: 0.5
+    linear_deadband: 0.01
+    reverse_deadband: 0.01
+    rotate_deadband: 0.03
+    reverse_stop_distance: 0.25
+    reverse_slow_distance: 0.45
+    side_stop_distance: 0.18
+    side_slow_distance: 0.35
+    rotate_stop_distance: 0.22
+    rotate_slow_distance: 0.40
+    reverse_limited_speed_abs: 0.03
+    rotate_limited_speed_abs: 0.15

@@ -6,6 +6,7 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 find_package(ament_cmake REQUIRED)
+find_package(diagnostic_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
@@ -41,7 +42,18 @@ ament_target_dependencies(tof_obstacle_node
   tf2_ros
 )
 
-install(TARGETS imu_node tof_node tof_obstacle_node
+add_executable(collision_guard_node src/collision_guard_node.cpp)
+target_include_directories(collision_guard_node PRIVATE
+  include
+)
+ament_target_dependencies(collision_guard_node
+  diagnostic_msgs
+  geometry_msgs
+  rclcpp
+  sensor_msgs
+)
+
+install(TARGETS imu_node tof_node tof_obstacle_node collision_guard_node
   DESTINATION lib/${PROJECT_NAME}
 )
 

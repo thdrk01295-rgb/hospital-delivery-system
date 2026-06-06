@@ -35,6 +35,8 @@ constexpr uint8_t kExpectedModelId = 0xEE;
 constexpr double kMinPublishRate = 1.0;
 constexpr double kMaxPublishRate = 100.0;
 constexpr double kDefaultMaxRange = 1.2;
+constexpr uint16_t kMaxValidRangeMm = 1200;
+constexpr uint16_t kSentinelInvalidRangeMm = 8000;
 
 enum class RangeReadStatus
 {
@@ -45,6 +47,8 @@ enum class RangeReadStatus
   kSignalFail,
   kPhaseFail,
   kMinRangeFail,
+  kOutOfRange,
+  kSentinelRange,
   kHardwareFail,
   kUnknownFailure,
 };
@@ -66,6 +70,10 @@ const char * statusToString(RangeReadStatus status)
       return "phase fail";
     case RangeReadStatus::kMinRangeFail:
       return "min range fail";
+    case RangeReadStatus::kOutOfRange:
+      return "out of range";
+    case RangeReadStatus::kSentinelRange:
+      return "sentinel range";
     case RangeReadStatus::kHardwareFail:
       return "hardware fail";
     case RangeReadStatus::kUnknownFailure:
@@ -235,6 +243,12 @@ public:
         const auto decoded_status = decodeRangeStatus(range_status);
         if (decoded_status != RangeReadStatus::kOk) {
           return decoded_status;
+        }
+        if (range_mm >= kSentinelInvalidRangeMm) {
+          return RangeReadStatus::kSentinelRange;
+        }
+        if (range_mm > kMaxValidRangeMm) {
+          return RangeReadStatus::kOutOfRange;
         }
         range_m = static_cast<double>(range_mm) / 1000.0;
         return RangeReadStatus::kOk;
