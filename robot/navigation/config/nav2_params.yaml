@@ -167,8 +167,8 @@ global_costmap:
         obstacle_min_range: 0.0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 2.0
-        inflation_radius: 0.30  # 장애물 주변 45cm까지 위험영역 생성
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.45  # 장애물 주변 안전 반경
       always_send_full_costmap: true
 
 map_server:
