@@ -262,6 +262,35 @@ velocity_smoother:
     deadband_velocity: [0.0, 0.0, 0.0]
     velocity_timeout: 1.0
 
+collision_monitor:
+  ros__parameters:
+    use_sim_time: false
+    enabled: false
+    base_frame_id: "base_footprint"
+    odom_frame_id: "odom"
+    cmd_vel_in_topic: "cmd_vel_smoothed"
+    cmd_vel_out_topic: "cmd_vel"
+    state_topic: "collision_monitor_state"
+    transform_tolerance: 0.2
+    source_timeout: 1.0
+    base_shift_correction: true
+    stop_pub_timeout: 2.0
+    polygons: ["FootprintStop"]
+    FootprintStop:
+      type: "polygon"
+      points: "[[0.4, 0.295], [0.4, -0.295], [-0.4, -0.295], [-0.4, 0.295]]"
+      action_type: "stop"
+      min_points: 6
+      visualize: false
+      enabled: false
+    observation_sources: ["scan"]
+    scan:
+      type: "scan"
+      topic: "/scan"
+      min_height: 0.0
+      max_height: 2.0
+      enabled: false
+
 lifecycle_manager_navigation:
   ros__parameters:
     use_sim_time: false
