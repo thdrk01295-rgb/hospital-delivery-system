@@ -12,6 +12,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 def generate_launch_description():
     navigation_dir = get_package_share_directory('navigation')
+    slam_dir = get_package_share_directory('slam')
     control_dir = get_package_share_directory('control')
     sensor_dir = get_package_share_directory('sensor_components')
     description_dir = get_package_share_directory('description')
@@ -29,6 +30,11 @@ def generate_launch_description():
         navigation_dir,
         'config',
         'nav2_params.yaml'
+    )
+    default_map_yaml = os.path.join(
+        slam_dir,
+        'maps',
+        '0521.yaml'
     )
     default_encoder_params_file = os.path.join(
         control_dir,
@@ -56,27 +62,10 @@ def generate_launch_description():
         value_type=str
     )
 
-    nav2_common_arguments = [
-        '--ros-args',
-        '--log-level',
-        LaunchConfiguration('log_level')
-    ]
-    nav2_common_parameters = [
-        params_file,
-        {'use_sim_time': use_sim_time}
-    ]
-    lifecycle_nodes = [
-        'controller_server',
-        'planner_server',
-        'behavior_server',
-        'bt_navigator',
-    ]
-
     return LaunchDescription([
         DeclareLaunchArgument(
             'map',
-            default_value='',
-            description='Full path to map yaml file. Pass map:=/path/to/map.yaml for navigation mode.'
+            default_value=default_map_yaml
         ),
         DeclareLaunchArgument(
             'params_file',
@@ -89,18 +78,6 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'use_ekf',
             default_value='true'
-        ),
-        DeclareLaunchArgument(
-            'use_composition',
-            default_value='False'
-        ),
-        DeclareLaunchArgument(
-            'use_respawn',
-            default_value='False'
-        ),
-        DeclareLaunchArgument(
-            'log_level',
-            default_value='info'
         ),
         DeclareLaunchArgument(
             'encoder_params_file',
@@ -213,68 +190,14 @@ def generate_launch_description():
         ),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
-                os.path.join(nav2_bringup_dir, 'launch', 'localization_launch.py')
+                os.path.join(nav2_bringup_dir, 'launch', 'bringup_launch.py')
             ),
             launch_arguments={
                 'map': map_yaml,
                 'use_sim_time': use_sim_time,
                 'params_file': params_file,
                 'autostart': 'true',
-                'use_composition': LaunchConfiguration('use_composition'),
-                'use_respawn': LaunchConfiguration('use_respawn'),
-                'container_name': 'nav2_container',
+                'slam': 'False',
             }.items()
-        ),
-        Node(
-            package='nav2_controller',
-            executable='controller_server',
-            name='controller_server',
-            output='screen',
-            respawn=LaunchConfiguration('use_respawn'),
-            respawn_delay=2.0,
-            parameters=nav2_common_parameters,
-            arguments=nav2_common_arguments
-        ),
-        Node(
-            package='nav2_planner',
-            executable='planner_server',
-            name='planner_server',
-            output='screen',
-            respawn=LaunchConfiguration('use_respawn'),
-            respawn_delay=2.0,
-            parameters=nav2_common_parameters,
-            arguments=nav2_common_arguments
-        ),
-        Node(
-            package='nav2_behaviors',
-            executable='behavior_server',
-            name='behavior_server',
-            output='screen',
-            respawn=LaunchConfiguration('use_respawn'),
-            respawn_delay=2.0,
-            parameters=nav2_common_parameters,
-            arguments=nav2_common_arguments
-        ),
-        Node(
-            package='nav2_bt_navigator',
-            executable='bt_navigator',
-            name='bt_navigator',
-            output='screen',
-            respawn=LaunchConfiguration('use_respawn'),
-            respawn_delay=2.0,
-            parameters=nav2_common_parameters,
-            arguments=nav2_common_arguments
-        ),
-        Node(
-            package='nav2_lifecycle_manager',
-            executable='lifecycle_manager',
-            name='lifecycle_manager_navigation',
-            output='screen',
-            parameters=[{
-                'use_sim_time': use_sim_time,
-                'autostart': True,
-                'node_names': lifecycle_nodes
-            }],
-            arguments=nav2_common_arguments
         ),
     ])

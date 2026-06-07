@@ -17,12 +17,12 @@ amcl:
 
     lambda_short: 0.1 # 예상보다 짧은 거리 측정 확률 모델
     laser_likelihood_max_dist: 2.0 # likelihood field 최대 거리
-    laser_max_range: 7.0
+    laser_max_range: 100.0
     laser_min_range: -1.0
     laser_model_type: "likelihood_field"
     max_beams: 60 # 라이다 데이터
-    max_particles: 800 # 초기 검증용 위치추정 particle 수
-    min_particles: 200
+    max_particles: 2000 # 초기 검증용 위치추정 particle 수
+    min_particles: 500
     odom_frame_id: "odom"
     pf_err: 0.05
     pf_z: 0.99
@@ -35,16 +35,13 @@ amcl:
     sigma_hit: 0.2
     tf_broadcast: true
     transform_tolerance: 1.0
-    update_min_a: 0.01
-    update_min_d: 0.01
+    update_min_a: 0.2
+    update_min_d: 0.25
     z_hit: 0.5
     z_max: 0.05
     z_rand: 0.5
     z_short: 0.05
     scan_topic: "/scan"
-    always_reset_initial_pose: false
-    first_map_only: false
-
 bt_navigator:
   ros__parameters:
     use_sim_time: false
@@ -87,7 +84,7 @@ controller_server:
       min_lookahead_dist: 0.25  # 추종점 최소 거리
       max_lookahead_dist: 0.7
       lookahead_time: 1.5
-      rotate_to_heading_angular_vel: 0.3  # 제자리 회전 속도
+      rotate_to_heading_angular_vel: 0.5  # 제자리 회전 속도
       transform_tolerance: 0.1
       use_velocity_scaled_lookahead_dist: false # 속도에 따라 lookahead를 자동 조절
       min_approach_linear_velocity: 0.05  # goal 접근 시 최소 선속도
@@ -96,8 +93,8 @@ controller_server:
       max_allowed_time_to_collision_up_to_carrot: 1.0 # 현재 속도로 전방 충돌까지 허용 시간
       use_regulated_linear_velocity_scaling: true
       use_cost_regulated_linear_velocity_scaling: true
-      regulated_linear_scaling_min_radius: 0.9  # 이 회전 반경보다 작으면 속도 제한 적용
-      regulated_linear_scaling_min_speed: 0.10
+      regulated_linear_scaling_min_radius: 0.6  # 이 회전 반경보다 작으면 속도 제한 적용
+      regulated_linear_scaling_min_speed: 0.05
       cost_scaling_dist: 0.3  # 장애물 가까워질 때 감속 시작 거리
       cost_scaling_gain: 1.0  # cost 기반 감속 강도
       inflation_cost_scaling_factor: 3.0  # 장애물 근처 cost 증가 정도
@@ -235,7 +232,7 @@ behavior_server:
     robot_base_frame: "base_footprint"
     transform_tolerance: 0.1
     simulate_ahead_time: 2.0  # behavior 실행 전 전방 시뮬레이션 시간
-    max_rotational_vel: 0.45  # spin 동작 최대 회전 속도
+    max_rotational_vel: 0.5  # spin 동작 최대 회전 속도
     min_rotational_vel: 0.2   # spin 동작 최소 회전 속도
     rotational_acc_lim: 1.0
 
