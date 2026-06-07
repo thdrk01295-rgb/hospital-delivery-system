@@ -126,14 +126,14 @@ local_costmap:
           clearing: true
           marking: true
           data_type: "LaserScan"
-      raytrace_max_range: 4.0   # clear 영역 최대 거리
-      raytrace_min_range: 0.0   
-      obstacle_max_range: 3.0   # 장애물 등록 최대 거리
-      obstacle_min_range: 0.0
+          raytrace_max_range: 4.0   # clear 영역 최대 거리
+          raytrace_min_range: 0.0
+          obstacle_max_range: 3.0   # 장애물 등록 최대 거리
+          obstacle_min_range: 0.0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
-        inflation_radius: 0.45  # 장애물 주변 안전 반경
+        inflation_radius: 0.55  # 장애물 주변 안전 반경
       always_send_full_costmap: true
 
 global_costmap:
@@ -168,7 +168,7 @@ global_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
-        inflation_radius: 0.45  # 장애물 주변 안전 반경
+        inflation_radius: 0.55  # 장애물 주변 안전 반경
       always_send_full_costmap: true
 
 map_server:
@@ -261,35 +261,6 @@ velocity_smoother:
     odom_duration: 0.1  # CLOSED_LOOP에서 odom 속도 추정에 사용할 시간
     deadband_velocity: [0.0, 0.0, 0.0]
     velocity_timeout: 1.0
-
-collision_monitor:
-  ros__parameters:
-    use_sim_time: false
-    enabled: false
-    base_frame_id: "base_footprint"
-    odom_frame_id: "odom"
-    cmd_vel_in_topic: "cmd_vel_smoothed"
-    cmd_vel_out_topic: "cmd_vel"
-    state_topic: "collision_monitor_state"
-    transform_tolerance: 0.2
-    source_timeout: 1.0
-    base_shift_correction: true
-    stop_pub_timeout: 2.0
-    polygons: ["FootprintStop"]
-    FootprintStop:
-      type: "polygon"
-      points: "[[0.4, 0.295], [0.4, -0.295], [-0.4, -0.295], [-0.4, 0.295]]"
-      action_type: "stop"
-      min_points: 6
-      visualize: false
-      enabled: false
-    observation_sources: ["scan"]
-    scan:
-      type: "scan"
-      topic: "/scan"
-      min_height: 0.0
-      max_height: 2.0
-      enabled: false
 
 lifecycle_manager_navigation:
   ros__parameters:
