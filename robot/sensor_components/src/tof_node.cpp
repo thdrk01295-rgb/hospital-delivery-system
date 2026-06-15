@@ -1,17 +1,15 @@
 #include <fcntl.h>
+#include <gpiod.h>
 #include <linux/i2c-dev.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
 
 #include <algorithm>
-#include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
-#include <cstring>
-#include <fstream>
-#include <memory>
 #include <limits>
+#include <memory>
 #include <string>
 #include <thread>
 #include <utility>
@@ -103,51 +101,51 @@ RangeReadStatus decodeRangeStatus(uint8_t range_status)
   }
 }
 
-bool writeTextFile(const std::string & path, const std::string & value)
-{
-  std::ofstream file(path);
-  if (!file.is_open()) {
-    return false;
-  }
-  file << value;
-  return file.good();
-}
-
-bool pathExists(const std::string & path)
-{
-  return ::access(path.c_str(), F_OK) == 0;
-}
 }  // namespace
 
-class SysfsGpio
+class GpiodGpio
 {
 public:
-  explicit SysfsGpio(int pin)
-  : pin_(pin), path_("/sys/class/gpio/gpio" + std::to_string(pin))
+  GpiodGpio(std::string chip_path, int line_offset)
+  : chip_path_(std::move(chip_path)), line_offset_(line_offset), chip_(nullptr), line_(nullptr)
   {
   }
 
-  bool exportLine()
+  ~GpiodGpio()
   {
-    if (!pathExists(path_) && !writeTextFile("/sys/class/gpio/export", std::to_string(pin_))) {
+    if (line_ != nullptr) {
+      gpiod_line_release(line_);
+    }
+    if (chip_ != nullptr) {
+      gpiod_chip_close(chip_);
+    }
+  }
+
+  bool requestOutput()
+  {
+    chip_ = gpiod_chip_open(chip_path_.c_str());
+    if (chip_ == nullptr) {
       return false;
     }
 
-    for (int i = 0; i < 20 && !pathExists(path_ + "/direction"); ++i) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    line_ = gpiod_chip_get_line(chip_, line_offset_);
+    if (line_ == nullptr) {
+      return false;
     }
 
-    return writeTextFile(path_ + "/direction", "out");
+    return gpiod_line_request_output(line_, "tof_node", 0) == 0;
   }
 
   bool setValue(bool high)
   {
-    return writeTextFile(path_ + "/value", high ? "1" : "0");
+    return line_ != nullptr && gpiod_line_set_value(line_, high ? 1 : 0) == 0;
   }
 
 private:
-  int pin_;
-  std::string path_;
+  std::string chip_path_;
+  int line_offset_;
+  gpiod_chip * chip_;
+  gpiod_line * line_;
 };
 
 struct SensorConfig
@@ -355,6 +353,7 @@ class TofNode : public rclcpp::Node
 public:
   TofNode()
   : Node("tof_node"),
+    gpio_chip_(declare_parameter<std::string>("gpio_chip", "/dev/gpiochip4")),
     i2c_bus_(declare_parameter<int>("i2c_bus", 1)),
     publish_rate_(declare_parameter<double>("publish_rate", 20.0)),
     min_range_(declare_parameter<double>("min_range", 0.03)),
@@ -398,11 +397,11 @@ private:
 
     bool gpio_ok = true;
     for (const auto & sensor : sensors_) {
-      auto gpio = std::make_unique<SysfsGpio>(sensor->config().xshut_gpio);
-      if (!gpio->exportLine() || !gpio->setValue(false)) {
+      auto gpio = std::make_unique<GpiodGpio>(gpio_chip_, sensor->config().xshut_gpio);
+      if (!gpio->requestOutput() || !gpio->setValue(false)) {
         RCLCPP_ERROR(
-          get_logger(), "Failed to drive XSHUT GPIO %d for %s",
-          sensor->config().xshut_gpio, sensor->config().name.c_str());
+          get_logger(), "Failed to drive XSHUT GPIO %d on %s for %s",
+          sensor->config().xshut_gpio, gpio_chip_.c_str(), sensor->config().name.c_str());
         gpio_ok = false;
       }
       gpios_.push_back(std::move(gpio));
@@ -561,13 +560,14 @@ private:
     return "tof_" + name + "_link";
   }
 
+  std::string gpio_chip_;
   int i2c_bus_;
   double publish_rate_;
   double min_range_;
   double max_range_;
   double field_of_view_;
   std::vector<std::unique_ptr<VL53L0XDevice>> sensors_;
-  std::vector<std::unique_ptr<SysfsGpio>> gpios_;
+  std::vector<std::unique_ptr<GpiodGpio>> gpios_;
   std::vector<rclcpp::Publisher<sensor_msgs::msg::Range>::SharedPtr> publishers_;
   rclcpp::TimerBase::SharedPtr timer_;
 };

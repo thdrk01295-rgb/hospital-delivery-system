@@ -7,12 +7,14 @@ endif()
 
 find_package(ament_cmake REQUIRED)
 find_package(diagnostic_msgs REQUIRED)
+find_package(PkgConfig REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
+pkg_check_modules(GPIOD REQUIRED IMPORTED_TARGET libgpiod)
 
 add_executable(imu_node src/imu_node.cpp)
 target_include_directories(imu_node PRIVATE
@@ -27,6 +29,9 @@ add_executable(tof_node src/tof_node.cpp)
 ament_target_dependencies(tof_node
   rclcpp
   sensor_msgs
+)
+target_link_libraries(tof_node
+  PkgConfig::GPIOD
 )
 
 add_executable(tof_obstacle_node src/tof_obstacle_node.cpp)
