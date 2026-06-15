@@ -3,7 +3,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, TimerAction
-from launch.conditions import IfCondition
+from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import Command, LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
@@ -23,6 +23,11 @@ def generate_launch_description():
     encoder_params_file = LaunchConfiguration('encoder_params_file')
     imu_params_file = LaunchConfiguration('imu_params_file')
     ekf_params_file = LaunchConfiguration('ekf_params_file')
+    tof_params_file = LaunchConfiguration('tof_params_file')
+    collision_guard_params_file = LaunchConfiguration('collision_guard_params_file')
+    use_scan_filter = LaunchConfiguration('use_scan_filter')
+    scan_filter_input_topic = LaunchConfiguration('scan_filter_input_topic')
+    scan_filter_output_topic = LaunchConfiguration('scan_filter_output_topic')
 
     default_params_file = os.path.join(
         navigation_dir,
@@ -49,6 +54,16 @@ def generate_launch_description():
         'config',
         'ekf.yaml'
     )
+    default_tof_params_file = os.path.join(
+        sensor_dir,
+        'config',
+        'tof_params.yaml'
+    )
+    default_collision_guard_params_file = os.path.join(
+        sensor_dir,
+        'config',
+        'collision_guard_params.yaml'
+    )
     default_urdf_file = os.path.join(
         description_dir,
         'urdf',
@@ -68,8 +83,8 @@ def generate_launch_description():
         ('/tf_static', 'tf_static')
     ]
     velocity_remappings = [
-        ('cmd_vel', 'cmd_vel_nav'),
-        ('cmd_vel_smoothed', 'cmd_vel')
+        ('cmd_vel', '/cmd_vel_nav'),
+        ('cmd_vel_smoothed', '/cmd_vel_smoothed')
     ]
     localization_lifecycle_nodes = [
         'map_server',
@@ -84,6 +99,23 @@ def generate_launch_description():
         'waypoint_follower',
         'velocity_smoother'
     ]
+    cyglidar_parameters = [{
+        'port_number': LaunchConfiguration('cyglidar_port'),
+        'baud_rate': ParameterValue(LaunchConfiguration('cyglidar_baud_rate'), value_type=int),
+        'frame_id': 'laser_frame',
+        'run_mode': ParameterValue(LaunchConfiguration('cyglidar_run_mode'), value_type=int),
+        'frequency_channel': 0,
+        'duration_mode': 0,
+        'duration_value': 10000,
+        'color_mode': 0,
+        'data_type_3d': 0,
+        'filter_mode': 0,
+        'edge_filter_value': 0,
+        'enable_kalmanfilter': False,
+        'enable_clahe': False,
+        'clahe_cliplimit': 40,
+        'clahe_tiles_grid_size': 8
+    }]
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -115,6 +147,14 @@ def generate_launch_description():
             default_value=default_ekf_params_file
         ),
         DeclareLaunchArgument(
+            'tof_params_file',
+            default_value=default_tof_params_file
+        ),
+        DeclareLaunchArgument(
+            'collision_guard_params_file',
+            default_value=default_collision_guard_params_file
+        ),
+        DeclareLaunchArgument(
             'motor_port',
             default_value='/dev/ttyACM0'
         ),
@@ -133,6 +173,42 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'cyglidar_run_mode',
             default_value='0'
+        ),
+        DeclareLaunchArgument(
+            'use_scan_filter',
+            default_value='true'
+        ),
+        DeclareLaunchArgument(
+            'scan_filter_input_topic',
+            default_value='/scan_raw'
+        ),
+        DeclareLaunchArgument(
+            'scan_filter_output_topic',
+            default_value='/scan'
+        ),
+        DeclareLaunchArgument(
+            'scan_filter_center_angle_rad',
+            default_value='0.0'
+        ),
+        DeclareLaunchArgument(
+            'scan_filter_remove_angle_width_rad',
+            default_value='0.06'
+        ),
+        DeclareLaunchArgument(
+            'scan_filter_enabled',
+            default_value='true'
+        ),
+        DeclareLaunchArgument(
+            'scan_filter_use_nan',
+            default_value='true'
+        ),
+        DeclareLaunchArgument(
+            'scan_filter_replacement_range',
+            default_value='0.0'
+        ),
+        DeclareLaunchArgument(
+            'scan_filter_debug_log',
+            default_value='false'
         ),
         Node(
             package='robot_state_publisher',
@@ -192,24 +268,53 @@ def generate_launch_description():
             package='cyglidar_d2_ros2',
             executable='cyglidar_d2_publisher',
             name='cyglidar_d2_publisher',
+            condition=UnlessCondition(use_scan_filter),
+            output='screen',
+            parameters=cyglidar_parameters
+        ),
+        Node(
+            package='cyglidar_d2_ros2',
+            executable='cyglidar_d2_publisher',
+            name='cyglidar_d2_publisher',
+            condition=IfCondition(use_scan_filter),
+            output='screen',
+            parameters=cyglidar_parameters,
+            remappings=[
+                ('scan', scan_filter_input_topic)
+            ]
+        ),
+        Node(
+            package='scan_filter',
+            executable='scan_filter_node',
+            name='scan_filter_node',
+            condition=IfCondition(use_scan_filter),
             output='screen',
             parameters=[{
-                'port_number': LaunchConfiguration('cyglidar_port'),
-                'baud_rate': ParameterValue(LaunchConfiguration('cyglidar_baud_rate'), value_type=int),
-                'frame_id': 'laser_frame',
-                'run_mode': ParameterValue(LaunchConfiguration('cyglidar_run_mode'), value_type=int),
-                'frequency_channel': 0,
-                'duration_mode': 0,
-                'duration_value': 10000,
-                'color_mode': 0,
-                'data_type_3d': 0,
-                'filter_mode': 0,
-                'edge_filter_value': 0,
-                'enable_kalmanfilter': False,
-                'enable_clahe': False,
-                'clahe_cliplimit': 40,
-                'clahe_tiles_grid_size': 8
+                'input_scan_topic': scan_filter_input_topic,
+                'output_scan_topic': scan_filter_output_topic,
+                'enabled': ParameterValue(
+                    LaunchConfiguration('scan_filter_enabled'), value_type=bool),
+                'center_angle_rad': ParameterValue(
+                    LaunchConfiguration('scan_filter_center_angle_rad'), value_type=float),
+                'remove_angle_width_rad': ParameterValue(
+                    LaunchConfiguration('scan_filter_remove_angle_width_rad'), value_type=float),
+                'use_nan': ParameterValue(
+                    LaunchConfiguration('scan_filter_use_nan'), value_type=bool),
+                'replacement_range': ParameterValue(
+                    LaunchConfiguration('scan_filter_replacement_range'), value_type=float),
+                'debug_log': ParameterValue(
+                    LaunchConfiguration('scan_filter_debug_log'), value_type=bool)
             }]
+        ),
+        Node(
+            package='sensor_components',
+            executable='tof_node',
+            name='tof_node',
+            output='screen',
+            parameters=[
+                tof_params_file,
+                {'use_sim_time': use_sim_time}
+            ]
         ),
         Node(
             package='nav2_map_server',
@@ -253,7 +358,7 @@ def generate_launch_description():
             name='controller_server',
             output='screen',
             parameters=common_nav2_parameters,
-            remappings=tf_remappings + [('cmd_vel', 'cmd_vel_nav')]
+            remappings=tf_remappings + [('cmd_vel', '/cmd_vel_nav')]
         ),
         Node(
             package='nav2_smoother',
@@ -277,7 +382,7 @@ def generate_launch_description():
             name='behavior_server',
             output='screen',
             parameters=common_nav2_parameters,
-            remappings=tf_remappings
+            remappings=tf_remappings + [('cmd_vel', '/cmd_vel_nav')]
         ),
         Node(
             package='nav2_bt_navigator',
@@ -302,6 +407,16 @@ def generate_launch_description():
             output='screen',
             parameters=common_nav2_parameters,
             remappings=tf_remappings + velocity_remappings
+        ),
+        Node(
+            package='sensor_components',
+            executable='collision_guard_node',
+            name='collision_guard_node',
+            output='screen',
+            parameters=[
+                collision_guard_params_file,
+                {'use_sim_time': use_sim_time}
+            ]
         ),
         TimerAction(
             period=2.0,
