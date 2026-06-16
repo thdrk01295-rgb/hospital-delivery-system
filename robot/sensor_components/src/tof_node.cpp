@@ -35,6 +35,8 @@ constexpr double kMaxPublishRate = 100.0;
 constexpr double kDefaultMaxRange = 1.2;
 constexpr uint16_t kMaxValidRangeMm = 1200;
 constexpr uint16_t kSentinelInvalidRangeMm = 8000;
+constexpr auto kAllXshutLowDelay = std::chrono::milliseconds(100);
+constexpr auto kSensorPowerUpDelay = std::chrono::milliseconds(100);
 
 enum class RangeReadStatus
 {
@@ -198,18 +200,49 @@ public:
 
   bool initializeFromDefaultAddress()
   {
+    std::string reason;
+    return initializeFromDefaultAddress(reason);
+  }
+
+  bool initializeFromDefaultAddress(std::string & failure_reason)
+  {
     if (!openAt(kDefaultAddress)) {
+      failure_reason = "failed to open default I2C address 0x29";
       return false;
     }
 
     uint8_t model_id = 0;
-    if (!readRegister(kModelIdReg, model_id) || model_id != kExpectedModelId) {
+    if (!readRegister(kModelIdReg, model_id)) {
       closeBus();
+      failure_reason = "failed to read model ID at default address 0x29";
+      return false;
+    }
+    if (model_id != kExpectedModelId) {
+      closeBus();
+      failure_reason = "unexpected model ID at default address 0x29";
       return false;
     }
 
-    if (!setAddress(config_.i2c_address) || !initializeRanging()) {
+    if (!setAddress(config_.i2c_address)) {
       closeBus();
+      failure_reason = "failed to change address from 0x29 to target address";
+      return false;
+    }
+
+    if (!readRegister(kModelIdReg, model_id)) {
+      closeBus();
+      failure_reason = "target address read test failed";
+      return false;
+    }
+    if (model_id != kExpectedModelId) {
+      closeBus();
+      failure_reason = "target address read test returned unexpected model ID";
+      return false;
+    }
+
+    if (!initializeRanging()) {
+      closeBus();
+      failure_reason = "failed to start continuous ranging";
       return false;
     }
 
@@ -376,7 +409,7 @@ private:
       "front_right", "front_left", "rear_right", "rear_left"};
     const auto sensor_names = declare_parameter<std::vector<std::string>>("sensors", default_sensors);
 
-    for (const auto & name : sensor_names) {
+    for (const auto & name : orderedSensorNames(sensor_names)) {
       SensorConfig config;
       config.name = name;
       config.xshut_gpio = declare_parameter<int>(name + ".xshut_gpio", defaultXshut(name));
@@ -384,56 +417,70 @@ private:
       config.frame_id = declare_parameter<std::string>(name + ".frame_id", defaultFrameId(name));
       config.topic = declare_parameter<std::string>(name + ".topic", "/tof/" + name);
 
-      auto publisher = create_publisher<sensor_msgs::msg::Range>(config.topic, rclcpp::SensorDataQoS());
-      sensors_.push_back(std::make_unique<VL53L0XDevice>(config, i2c_bus_));
-      publishers_.push_back(publisher);
+      sensor_configs_.push_back(config);
     }
   }
 
   void initializeSensors()
   {
+    sensors_.clear();
+    publishers_.clear();
     gpios_.clear();
-    gpios_.reserve(sensors_.size());
+    gpios_.reserve(sensor_configs_.size());
 
-    bool gpio_ok = true;
-    for (const auto & sensor : sensors_) {
-      auto gpio = std::make_unique<GpiodGpio>(gpio_chip_, sensor->config().xshut_gpio);
+    for (const auto & config : sensor_configs_) {
+      auto gpio = std::make_unique<GpiodGpio>(gpio_chip_, config.xshut_gpio);
       if (!gpio->requestOutput() || !gpio->setValue(false)) {
         RCLCPP_ERROR(
-          get_logger(), "Failed to drive XSHUT GPIO %d on %s for %s",
-          sensor->config().xshut_gpio, gpio_chip_.c_str(), sensor->config().name.c_str());
-        gpio_ok = false;
+          get_logger(),
+          "Failed ToF GPIO setup: sensor=%s xshut_gpio=%d target_address=0x%02X reason=%s",
+          config.name.c_str(), config.xshut_gpio, config.i2c_address,
+          "failed to request GPIO output LOW");
       }
       gpios_.push_back(std::move(gpio));
     }
 
-    if (!gpio_ok) {
-      RCLCPP_ERROR(get_logger(), "ToF GPIO setup incomplete; node will keep running without exiting");
-    }
+    RCLCPP_INFO(
+      get_logger(), "Requested all ToF XSHUT GPIO lines LOW on %s; waiting %lld ms",
+      gpio_chip_.c_str(), static_cast<long long>(kAllXshutLowDelay.count()));
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    std::this_thread::sleep_for(kAllXshutLowDelay);
 
-    for (std::size_t i = 0; i < sensors_.size(); ++i) {
-      const auto & config = sensors_[i]->config();
+    for (std::size_t i = 0; i < sensor_configs_.size(); ++i) {
+      const auto & config = sensor_configs_[i];
       if (!gpios_[i]->setValue(true)) {
-        RCLCPP_ERROR(get_logger(), "Failed to enable ToF sensor %s", config.name.c_str());
-        sensors_[i]->setReady(false);
-        continue;
-      }
-
-      std::this_thread::sleep_for(std::chrono::milliseconds(50));
-      if (!sensors_[i]->initializeFromDefaultAddress()) {
         RCLCPP_ERROR(
-          get_logger(), "Failed to initialize ToF sensor %s at reassigned address 0x%02X",
-          config.name.c_str(), config.i2c_address);
-        gpios_[i]->setValue(false);
-        sensors_[i]->setReady(false);
+          get_logger(), "Failed ToF init: sensor=%s xshut_gpio=%d target_address=0x%02X reason=%s",
+          config.name.c_str(), config.xshut_gpio, config.i2c_address, "failed to drive XSHUT HIGH");
         continue;
       }
 
       RCLCPP_INFO(
-        get_logger(), "Initialized ToF sensor %s at 0x%02X on /dev/i2c-%d",
-        config.name.c_str(), config.i2c_address, i2c_bus_);
+        get_logger(), "Enabled ToF sensor: sensor=%s xshut_gpio=%d target_address=0x%02X",
+        config.name.c_str(), config.xshut_gpio, config.i2c_address);
+      std::this_thread::sleep_for(kSensorPowerUpDelay);
+
+      auto sensor = std::make_unique<VL53L0XDevice>(config, i2c_bus_);
+      std::string failure_reason;
+      if (!sensor->initializeFromDefaultAddress(failure_reason)) {
+        RCLCPP_ERROR(
+          get_logger(), "Failed ToF init: sensor=%s xshut_gpio=%d target_address=0x%02X reason=%s",
+          config.name.c_str(), config.xshut_gpio, config.i2c_address, failure_reason.c_str());
+        gpios_[i]->setValue(false);
+        continue;
+      }
+
+      auto publisher = create_publisher<sensor_msgs::msg::Range>(config.topic, rclcpp::SensorDataQoS());
+      RCLCPP_INFO(
+        get_logger(),
+        "Initialized ToF sensor: sensor=%s xshut_gpio=%d target_address=0x%02X i2c_bus=/dev/i2c-%d",
+        config.name.c_str(), config.xshut_gpio, config.i2c_address, i2c_bus_);
+      sensors_.push_back(std::move(sensor));
+      publishers_.push_back(publisher);
+    }
+
+    if (sensors_.empty()) {
+      RCLCPP_ERROR(get_logger(), "No ToF sensors initialized successfully; node will keep running");
     }
   }
 
@@ -526,6 +573,28 @@ private:
     return 0;
   }
 
+  std::vector<std::string> orderedSensorNames(const std::vector<std::string> & sensor_names) const
+  {
+    const std::vector<std::string> init_order = {
+      "front_right", "front_left", "rear_right", "rear_left"};
+    std::vector<std::string> ordered_names;
+    ordered_names.reserve(sensor_names.size());
+
+    for (const auto & ordered_name : init_order) {
+      if (std::find(sensor_names.begin(), sensor_names.end(), ordered_name) != sensor_names.end()) {
+        ordered_names.push_back(ordered_name);
+      }
+    }
+
+    for (const auto & name : sensor_names) {
+      if (std::find(init_order.begin(), init_order.end(), name) == init_order.end()) {
+        ordered_names.push_back(name);
+      }
+    }
+
+    return ordered_names;
+  }
+
   int defaultAddress(const std::string & name) const
   {
     if (name == "front_right") {
@@ -566,6 +635,7 @@ private:
   double min_range_;
   double max_range_;
   double field_of_view_;
+  std::vector<SensorConfig> sensor_configs_;
   std::vector<std::unique_ptr<VL53L0XDevice>> sensors_;
   std::vector<std::unique_ptr<GpiodGpio>> gpios_;
   std::vector<rclcpp::Publisher<sensor_msgs::msg::Range>::SharedPtr> publishers_;
