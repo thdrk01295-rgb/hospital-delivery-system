@@ -9,6 +9,7 @@
 #include <cerrno>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdint>
 #include <cstring>
 #include <limits>
@@ -32,6 +33,15 @@ constexpr uint8_t kResultInterruptStatusReg = 0x13;
 constexpr uint8_t kResultRangeStatusReg = 0x14;
 constexpr uint8_t kSystemInterruptClearReg = 0x0B;
 constexpr uint8_t kSysrangeStartReg = 0x00;
+constexpr uint8_t kSystemSequenceConfigReg = 0x01;
+constexpr uint8_t kSystemInterruptConfigGpioReg = 0x0A;
+constexpr uint8_t kGpioHvMuxActiveHighReg = 0x84;
+constexpr uint8_t kMsrcConfigControlReg = 0x60;
+constexpr uint8_t kFinalRangeConfigMinCountRateRtnLimitReg = 0x44;
+constexpr uint8_t kDynamicSpadNumRequestedRefSpadReg = 0x4E;
+constexpr uint8_t kDynamicSpadRefEnStartOffsetReg = 0x4F;
+constexpr uint8_t kGlobalConfigSpadEnablesRef0Reg = 0xB0;
+constexpr uint8_t kGlobalConfigRefEnStartSelectReg = 0xB6;
 constexpr uint8_t kModelIdReg = 0xC0;
 constexpr uint8_t kExpectedModelId = 0xEE;
 constexpr uint16_t kVl53l1xI2cAddressReg = 0x0001;
@@ -56,6 +66,7 @@ constexpr double kDefaultMaxRange = 1.2;
 constexpr uint16_t kSentinelInvalidRangeMm = 8000;
 constexpr auto kAllXshutLowDelay = std::chrono::milliseconds(100);
 constexpr auto kSensorPowerUpDelay = std::chrono::milliseconds(50);
+constexpr auto kVl53l0xInitTimeout = std::chrono::milliseconds(500);
 
 enum class RangeReadStatus
 {
@@ -244,13 +255,18 @@ public:
   {
     return readRangeMeters(range_m);
   }
+  virtual std::string debugState() const
+  {
+    return {};
+  }
 };
 
 class VL53L0XDevice : public TofDevice
 {
 public:
   VL53L0XDevice(SensorConfig config, int i2c_bus)
-  : config_(std::move(config)), i2c_bus_(i2c_bus), i2c_fd_(-1), ready_(false)
+  : config_(std::move(config)), i2c_bus_(i2c_bus), i2c_fd_(-1), ready_(false), stop_variable_(0),
+    last_interrupt_status_(0), last_range_status_(0), last_sysrange_start_(0)
   {
   }
 
@@ -310,6 +326,12 @@ public:
       return false;
     }
 
+    if (!initializeRanging()) {
+      closeBus();
+      failure_reason = "failed to initialize VL53L0X ranging";
+      return false;
+    }
+
     if (!setAddress(config_.i2c_address)) {
       closeBus();
       failure_reason = "failed to change address from 0x29 to target address";
@@ -327,12 +349,6 @@ public:
       return false;
     }
 
-    if (!initializeRanging()) {
-      closeBus();
-      failure_reason = "failed to start continuous ranging";
-      return false;
-    }
-
     ready_ = true;
     return true;
   }
@@ -345,11 +361,17 @@ public:
 
     const auto deadline =
       std::chrono::steady_clock::now() + std::chrono::milliseconds(config_.read_timeout_ms);
+    const auto start_status = startSingleMeasurement(deadline);
+    if (start_status != RangeReadStatus::kOk) {
+      return start_status;
+    }
+
     while (std::chrono::steady_clock::now() < deadline) {
       uint8_t interrupt_status = 0;
       if (!readRegister(kResultInterruptStatusReg, interrupt_status)) {
         return RangeReadStatus::kI2cError;
       }
+      last_interrupt_status_ = interrupt_status;
       if ((interrupt_status & 0x07) != 0) {
         uint8_t range_status = 0;
         uint16_t range_mm = 0;
@@ -359,6 +381,7 @@ public:
           writeRegister(kSystemInterruptClearReg, 0x01);
           return RangeReadStatus::kI2cError;
         }
+        last_range_status_ = range_status;
         writeRegister(kSystemInterruptClearReg, 0x01);
         const auto decoded_status = decodeRangeStatus(range_status);
         if (decoded_status != RangeReadStatus::kOk) {
@@ -386,6 +409,7 @@ public:
     if (!readRegister(kResultInterruptStatusReg, interrupt_status)) {
       return RangeReadStatus::kI2cError;
     }
+    last_interrupt_status_ = interrupt_status;
     if ((interrupt_status & 0x07) == 0) {
       return RangeReadStatus::kTimeout;
     }
@@ -398,6 +422,7 @@ public:
       writeRegister(kSystemInterruptClearReg, 0x01);
       return RangeReadStatus::kI2cError;
     }
+    last_range_status_ = range_status;
     writeRegister(kSystemInterruptClearReg, 0x01);
 
     const auto decoded_status = decodeRangeStatus(range_status);
@@ -409,6 +434,15 @@ public:
     }
     range_m = static_cast<double>(range_mm) / 1000.0;
     return RangeReadStatus::kOk;
+  }
+
+  std::string debugState() const override
+  {
+    char buffer[96];
+    std::snprintf(
+      buffer, sizeof(buffer), "vl53l0x_regs=sysrange_start=0x%02X interrupt_status=0x%02X range_status=0x%02X",
+      last_sysrange_start_, last_interrupt_status_, last_range_status_);
+    return buffer;
   }
 
 private:
@@ -431,29 +465,195 @@ private:
 
   bool initializeRanging()
   {
-    const std::pair<uint8_t, uint8_t> init_sequence[] = {
+    const std::pair<uint8_t, uint8_t> access_sequence[] = {
       {0x88, 0x00}, {0x80, 0x01}, {0xFF, 0x01}, {0x00, 0x00},
-      {0x91, 0x3C}, {0x00, 0x01}, {0xFF, 0x00}, {0x80, 0x00},
-      {0x60, 0x00}, {0x01, 0xFF}, {0x00, 0x02},
     };
-
-    for (const auto & entry : init_sequence) {
+    for (const auto & entry : access_sequence) {
+      if (!writeRegister(entry.first, entry.second)) {
+        return false;
+      }
+    }
+    if (!readRegister(0x91, stop_variable_)) {
+      return false;
+    }
+    const std::pair<uint8_t, uint8_t> close_access_sequence[] = {
+      {0x00, 0x01}, {0xFF, 0x00}, {0x80, 0x00},
+    };
+    for (const auto & entry : close_access_sequence) {
       if (!writeRegister(entry.first, entry.second)) {
         return false;
       }
     }
 
-    return startContinuous();
-  }
+    uint8_t config_control = 0;
+    if (!readRegister(kMsrcConfigControlReg, config_control) ||
+      !writeRegister(kMsrcConfigControlReg, config_control | 0x12) ||
+      !writeRegister16(kFinalRangeConfigMinCountRateRtnLimitReg, 32) ||
+      !writeRegister(kSystemSequenceConfigReg, 0xFF))
+    {
+      return false;
+    }
 
-  bool startContinuous()
-  {
-    const std::pair<uint8_t, uint8_t> sequence[] = {
-      {0x80, 0x01}, {0xFF, 0x01}, {0x00, 0x00}, {0x91, 0x3C},
-      {0x00, 0x01}, {0xFF, 0x00}, {0x80, 0x00}, {kSysrangeStartReg, 0x02},
+    uint8_t spad_count = 0;
+    bool spad_is_aperture = false;
+    if (!getSpadInfo(spad_count, spad_is_aperture)) {
+      return false;
+    }
+
+    uint8_t ref_spad_map[6] = {};
+    if (!readRegisters(kGlobalConfigSpadEnablesRef0Reg, ref_spad_map, sizeof(ref_spad_map))) {
+      return false;
+    }
+
+    const std::pair<uint8_t, uint8_t> spad_sequence[] = {
+      {0xFF, 0x01}, {kDynamicSpadRefEnStartOffsetReg, 0x00},
+      {kDynamicSpadNumRequestedRefSpadReg, 0x2C}, {0xFF, 0x00},
+      {kGlobalConfigRefEnStartSelectReg, 0xB4},
+    };
+    for (const auto & entry : spad_sequence) {
+      if (!writeRegister(entry.first, entry.second)) {
+        return false;
+      }
+    }
+
+    const uint8_t first_spad_to_enable = spad_is_aperture ? 12 : 0;
+    uint8_t spads_enabled = 0;
+    for (uint8_t i = 0; i < 48; ++i) {
+      const uint8_t byte_index = i / 8;
+      const uint8_t bit_mask = static_cast<uint8_t>(1U << (i % 8));
+      if (i < first_spad_to_enable || spads_enabled == spad_count) {
+        ref_spad_map[byte_index] &= static_cast<uint8_t>(~bit_mask);
+      } else if ((ref_spad_map[byte_index] & bit_mask) != 0) {
+        ++spads_enabled;
+      }
+    }
+    if (!writeRegisters(kGlobalConfigSpadEnablesRef0Reg, ref_spad_map, sizeof(ref_spad_map))) {
+      return false;
+    }
+
+    const std::pair<uint8_t, uint8_t> tuning_sequence[] = {
+      {0xFF, 0x01}, {0x00, 0x00}, {0xFF, 0x00}, {0x09, 0x00}, {0x10, 0x00},
+      {0x11, 0x00}, {0x24, 0x01}, {0x25, 0xFF}, {0x75, 0x00}, {0xFF, 0x01},
+      {0x4E, 0x2C}, {0x48, 0x00}, {0x30, 0x20}, {0xFF, 0x00}, {0x30, 0x09},
+      {0x54, 0x00}, {0x31, 0x04}, {0x32, 0x03}, {0x40, 0x83}, {0x46, 0x25},
+      {0x60, 0x00}, {0x27, 0x00}, {0x50, 0x06}, {0x51, 0x00}, {0x52, 0x96},
+      {0x56, 0x08}, {0x57, 0x30}, {0x61, 0x00}, {0x62, 0x00}, {0x64, 0x00},
+      {0x65, 0x00}, {0x66, 0xA0}, {0xFF, 0x01}, {0x22, 0x32}, {0x47, 0x14},
+      {0x49, 0xFF}, {0x4A, 0x00}, {0xFF, 0x00}, {0x7A, 0x0A}, {0x7B, 0x00},
+      {0x78, 0x21}, {0xFF, 0x01}, {0x23, 0x34}, {0x42, 0x00}, {0x44, 0xFF},
+      {0x45, 0x26}, {0x46, 0x05}, {0x40, 0x40}, {0x0E, 0x06}, {0x20, 0x1A},
+      {0x43, 0x40}, {0xFF, 0x00}, {0x34, 0x03}, {0x35, 0x44}, {0xFF, 0x01},
+      {0x31, 0x04}, {0x4B, 0x09}, {0x4C, 0x05}, {0x4D, 0x04}, {0xFF, 0x00},
+      {0x44, 0x00}, {0x45, 0x20}, {0x47, 0x08}, {0x48, 0x28}, {0x67, 0x00},
+      {0x70, 0x04}, {0x71, 0x01}, {0x72, 0xFE}, {0x76, 0x00}, {0x77, 0x00},
+      {0xFF, 0x01}, {0x0D, 0x01}, {0xFF, 0x00}, {0x80, 0x01}, {0x01, 0xF8},
+      {0xFF, 0x01}, {0x8E, 0x01}, {0x00, 0x01}, {0xFF, 0x00}, {0x80, 0x00},
     };
 
+    for (const auto & entry : tuning_sequence) {
+      if (!writeRegister(entry.first, entry.second)) {
+        return false;
+      }
+    }
+
+    uint8_t gpio_hv_mux = 0;
+    if (!writeRegister(kSystemInterruptConfigGpioReg, 0x04) ||
+      !readRegister(kGpioHvMuxActiveHighReg, gpio_hv_mux) ||
+      !writeRegister(kGpioHvMuxActiveHighReg, gpio_hv_mux & static_cast<uint8_t>(~0x10)) ||
+      !writeRegister(kSystemInterruptClearReg, 0x01) ||
+      !writeRegister(kSystemSequenceConfigReg, 0xE8) ||
+      !writeRegister(kSystemSequenceConfigReg, 0x01) ||
+      !performSingleRefCalibration(0x40) ||
+      !writeRegister(kSystemSequenceConfigReg, 0x02) ||
+      !performSingleRefCalibration(0x00) ||
+      !writeRegister(kSystemSequenceConfigReg, 0xE8))
+    {
+      return false;
+    }
+    return true;
+  }
+
+  RangeReadStatus startSingleMeasurement(std::chrono::steady_clock::time_point deadline)
+  {
+    const std::pair<uint8_t, uint8_t> sequence[] = {
+      {0x80, 0x01}, {0xFF, 0x01}, {0x00, 0x00}, {0x91, stop_variable_},
+      {0x00, 0x01}, {0xFF, 0x00}, {0x80, 0x00}, {kSysrangeStartReg, 0x01},
+    };
     for (const auto & entry : sequence) {
+      if (!writeRegister(entry.first, entry.second)) {
+        return RangeReadStatus::kI2cError;
+      }
+    }
+
+    do {
+      if (!readRegister(kSysrangeStartReg, last_sysrange_start_)) {
+        return RangeReadStatus::kI2cError;
+      }
+      if ((last_sysrange_start_ & 0x01) == 0) {
+        return RangeReadStatus::kOk;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    } while (std::chrono::steady_clock::now() < deadline);
+
+    return RangeReadStatus::kTimeout;
+  }
+
+  bool getSpadInfo(uint8_t & count, bool & is_aperture)
+  {
+    const std::pair<uint8_t, uint8_t> start_sequence[] = {
+      {0x80, 0x01}, {0xFF, 0x01}, {0x00, 0x00}, {0xFF, 0x06},
+    };
+    for (const auto & entry : start_sequence) {
+      if (!writeRegister(entry.first, entry.second)) {
+        return false;
+      }
+    }
+
+    uint8_t value = 0;
+    if (!readRegister(0x83, value) || !writeRegister(0x83, value | 0x04)) {
+      return false;
+    }
+
+    const std::pair<uint8_t, uint8_t> request_sequence[] = {
+      {0xFF, 0x07}, {0x81, 0x01}, {0x80, 0x01}, {0x94, 0x6B}, {0x83, 0x00},
+    };
+    for (const auto & entry : request_sequence) {
+      if (!writeRegister(entry.first, entry.second)) {
+        return false;
+      }
+    }
+
+    const auto deadline = std::chrono::steady_clock::now() + kVl53l0xInitTimeout;
+    do {
+      if (!readRegister(0x83, value)) {
+        return false;
+      }
+      if (value != 0x00) {
+        break;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    } while (std::chrono::steady_clock::now() < deadline);
+    if (value == 0x00) {
+      return false;
+    }
+
+    uint8_t spad_info = 0;
+    if (!writeRegister(0x83, 0x01) || !readRegister(0x92, spad_info)) {
+      return false;
+    }
+    count = spad_info & 0x7F;
+    is_aperture = ((spad_info >> 7) & 0x01) != 0;
+
+    if (!writeRegister(0x81, 0x00) || !writeRegister(0xFF, 0x06) ||
+      !readRegister(0x83, value) || !writeRegister(0x83, value & static_cast<uint8_t>(~0x04)))
+    {
+      return false;
+    }
+
+    const std::pair<uint8_t, uint8_t> restore_sequence[] = {
+      {0xFF, 0x01}, {0x00, 0x01}, {0xFF, 0x00}, {0x80, 0x00},
+    };
+    for (const auto & entry : restore_sequence) {
       if (!writeRegister(entry.first, entry.second)) {
         return false;
       }
@@ -461,9 +661,37 @@ private:
     return true;
   }
 
+  bool performSingleRefCalibration(uint8_t vhv_init_byte)
+  {
+    if (!writeRegister(kSysrangeStartReg, static_cast<uint8_t>(0x01 | vhv_init_byte))) {
+      return false;
+    }
+
+    const auto deadline = std::chrono::steady_clock::now() + kVl53l0xInitTimeout;
+    do {
+      if (!readRegister(kResultInterruptStatusReg, last_interrupt_status_)) {
+        return false;
+      }
+      if ((last_interrupt_status_ & 0x07) != 0) {
+        return writeRegister(kSystemInterruptClearReg, 0x01) &&
+               writeRegister(kSysrangeStartReg, 0x00);
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    } while (std::chrono::steady_clock::now() < deadline);
+
+    return false;
+  }
+
   bool writeRegister(uint8_t reg, uint8_t value)
   {
     const uint8_t data[2] = {reg, value};
+    return ::write(i2c_fd_, data, sizeof(data)) == static_cast<ssize_t>(sizeof(data));
+  }
+
+  bool writeRegister16(uint8_t reg, uint16_t value)
+  {
+    const uint8_t data[3] = {
+      reg, static_cast<uint8_t>((value >> 8) & 0xFF), static_cast<uint8_t>(value & 0xFF)};
     return ::write(i2c_fd_, data, sizeof(data)) == static_cast<ssize_t>(sizeof(data));
   }
 
@@ -488,6 +716,22 @@ private:
     return true;
   }
 
+  bool readRegisters(uint8_t reg, uint8_t * values, std::size_t length)
+  {
+    if (::write(i2c_fd_, &reg, 1) != 1) {
+      return false;
+    }
+    return ::read(i2c_fd_, values, length) == static_cast<ssize_t>(length);
+  }
+
+  bool writeRegisters(uint8_t reg, const uint8_t * values, std::size_t length)
+  {
+    std::vector<uint8_t> data(length + 1);
+    data[0] = reg;
+    std::copy(values, values + length, data.begin() + 1);
+    return ::write(i2c_fd_, data.data(), data.size()) == static_cast<ssize_t>(data.size());
+  }
+
   void closeBus()
   {
     if (i2c_fd_ >= 0) {
@@ -500,6 +744,10 @@ private:
   int i2c_bus_;
   int i2c_fd_;
   bool ready_;
+  uint8_t stop_variable_;
+  uint8_t last_interrupt_status_;
+  uint8_t last_range_status_;
+  uint8_t last_sysrange_start_;
 };
 
 class VL53L1XDevice : public TofDevice
@@ -1115,6 +1363,7 @@ private:
             status = runtime->device->readRangeMeters(range);
           }
         }
+        const std::string debug_state = runtime->device ? runtime->device->debugState() : std::string();
         const auto elapsed_ms = std::chrono::duration<double, std::milli>(
           std::chrono::steady_clock::now() - cycle_start).count();
         const auto now = get_clock()->now();
@@ -1132,9 +1381,9 @@ private:
         }
 
         RCLCPP_DEBUG(
-          get_logger(), "ToF read %s(0x%02X): status=%s duration=%.1f ms read_timeout_ms=%d",
+          get_logger(), "ToF read %s(0x%02X): status=%s duration=%.1f ms read_timeout_ms=%d %s",
           runtime->config.name.c_str(), runtime->config.i2c_address, statusToString(status), elapsed_ms,
-          runtime->config.read_timeout_ms);
+          runtime->config.read_timeout_ms, debug_state.c_str());
 
         if (elapsed_ms > publish_period_ms_) {
           RCLCPP_WARN_THROTTLE(
