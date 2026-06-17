@@ -59,7 +59,7 @@ void TofObstacleNode::loadSensors()
     "front_right",
     "rear_left",
     "rear_right",
-    "new",
+    "rear_center",
   };
   const std::vector<std::string> sensor_names =
     declare_parameter<std::vector<std::string>>("sensors", default_sensor_names);

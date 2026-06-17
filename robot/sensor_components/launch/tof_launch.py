@@ -30,6 +30,7 @@ def generate_launch_description():
     front_right_yaw = LaunchConfiguration('front_right_yaw')
     rear_left_yaw = LaunchConfiguration('rear_left_yaw')
     rear_right_yaw = LaunchConfiguration('rear_right_yaw')
+    rear_center_yaw = LaunchConfiguration('rear_center_yaw')
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -62,6 +63,11 @@ def generate_launch_description():
             default_value='-2.70526',
             description='Rear-right ToF yaw relative to base_link in radians',
         ),
+        DeclareLaunchArgument(
+            'rear_center_yaw',
+            default_value='3.141593',
+            description='Rear-center ToF yaw relative to base_link in radians',
+        ),
         Node(
             package='sensor_components',
             executable='tof_node',
@@ -73,4 +79,5 @@ def generate_launch_description():
         static_tof_transform('tof_front_right_link', 0.22, -0.32, 0.15, front_right_yaw),
         static_tof_transform('tof_rear_left_link', -0.55, 0.28, 0.15, rear_left_yaw),
         static_tof_transform('tof_rear_right_link', -0.55, -0.28, 0.15, rear_right_yaw),
+        static_tof_transform('tof_rear_center_link', -0.55, 0.0, 0.15, rear_center_yaw),
     ])

@@ -7,6 +7,7 @@ collision_guard_node:
     front_right_topic: "/tof/front_right"
     rear_left_topic: "/tof/rear_left"
     rear_right_topic: "/tof/rear_right"
+    rear_center_topic: "/tof/rear_center"
     min_range: 0.03
     max_valid_range: 1.2
     sentinel_invalid_range: 8.0

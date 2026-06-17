@@ -42,6 +42,11 @@
   <xacro:property name="tof_rear_right_z" value="0.15"/>
   <xacro:property name="tof_rear_right_yaw" value="-2.70526"/>
 
+  <xacro:property name="tof_rear_center_x" value="-0.55"/>
+  <xacro:property name="tof_rear_center_y" value="0.0"/>
+  <xacro:property name="tof_rear_center_z" value="0.15"/>
+  <xacro:property name="tof_rear_center_yaw" value="3.141593"/>
+
   <material name="body_gray">
     <color rgba="0.55 0.58 0.62 1.0"/>
   </material>
@@ -219,4 +224,10 @@
     y="${tof_rear_right_y}"
     z="${tof_rear_right_z}"
     yaw="${tof_rear_right_yaw}"/>
+  <xacro:tof_sensor
+    name="tof_rear_center_link"
+    x="${tof_rear_center_x}"
+    y="${tof_rear_center_y}"
+    z="${tof_rear_center_z}"
+    yaw="${tof_rear_center_yaw}"/>
 </robot>

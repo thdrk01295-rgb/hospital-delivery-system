@@ -76,6 +76,11 @@ CollisionGuardNode::CollisionGuardNode()
   sensors_[static_cast<std::size_t>(SensorIndex::kRearRight)].topic =
     declare_parameter<std::string>("rear_right_topic", "/tof/rear_right");
 
+  sensors_[static_cast<std::size_t>(SensorIndex::kRearCenter)].name = "rear_center";
+  sensors_[static_cast<std::size_t>(SensorIndex::kRearCenter)].frame_id = "tof_rear_center_link";
+  sensors_[static_cast<std::size_t>(SensorIndex::kRearCenter)].topic =
+    declare_parameter<std::string>("rear_center_topic", "/tof/rear_center");
+
   for (std::size_t i = 0; i < sensors_.size(); ++i) {
     sensors_[i].last_received = rclcpp::Time(0, 0, get_clock()->get_clock_type());
     sensors_[i].subscription = create_subscription<sensor_msgs::msg::Range>(
@@ -107,7 +112,7 @@ void CollisionGuardNode::rangeCallback(
 void CollisionGuardNode::cmdVelCallback(const geometry_msgs::msg::Twist::SharedPtr msg)
 {
   const auto now = get_clock()->now();
-  std::array<SensorView, 4> views;
+  std::array<SensorView, kSensorCount> views;
   for (std::size_t i = 0; i < views.size(); ++i) {
     views[i] = sensorView(static_cast<SensorIndex>(i), now);
   }
@@ -180,11 +185,12 @@ bool CollisionGuardNode::sensorIsInvalidForMotion(const SensorView & sensor) con
 
 void CollisionGuardNode::applyReverseGuard(
   geometry_msgs::msg::Twist & output,
-  const std::array<SensorView, 4> & views,
+  const std::array<SensorView, kSensorCount> & views,
   GuardStatus & status) const
 {
   const auto rear_left = views[static_cast<std::size_t>(SensorIndex::kRearLeft)];
   const auto rear_right = views[static_cast<std::size_t>(SensorIndex::kRearRight)];
+  const auto rear_center = views[static_cast<std::size_t>(SensorIndex::kRearCenter)];
   const auto front_left = views[static_cast<std::size_t>(SensorIndex::kFrontLeft)];
   const auto front_right = views[static_cast<std::size_t>(SensorIndex::kFrontRight)];
 
@@ -205,6 +211,11 @@ void CollisionGuardNode::applyReverseGuard(
   if (sensorIsStop(rear_right, reverse_stop_distance_)) {
     output.linear.x = 0.0;
     updateStatus(status, "reverse", "stop", true, "rear_right", rear_right.distance, "stop_distance");
+    return;
+  }
+  if (sensorIsStop(rear_center, reverse_stop_distance_)) {
+    output.linear.x = 0.0;
+    updateStatus(status, "reverse", "stop", true, "rear_center", rear_center.distance, "stop_distance");
     return;
   }
   if (sensorIsStop(front_left, side_stop_distance_)) {
@@ -234,6 +245,10 @@ void CollisionGuardNode::applyReverseGuard(
     output.linear.x = std::max(output.linear.x, -reverse_limited_speed_abs_);
     updateStatus(status, "reverse", "slow", false, "rear_right", rear_right.distance, "slow_distance");
   }
+  if (sensorIsSlow(rear_center, reverse_slow_distance_)) {
+    output.linear.x = std::max(output.linear.x, -reverse_limited_speed_abs_);
+    updateStatus(status, "reverse", "slow", false, "rear_center", rear_center.distance, "slow_distance");
+  }
   if (sensorIsSlow(front_left, side_slow_distance_)) {
     output.linear.x = std::max(output.linear.x, -reverse_limited_speed_abs_);
     updateStatus(status, "reverse", "slow", false, "front_left", front_left.distance, "side_slow");
@@ -246,7 +261,7 @@ void CollisionGuardNode::applyReverseGuard(
 
 void CollisionGuardNode::applyRotateGuard(
   geometry_msgs::msg::Twist & output,
-  const std::array<SensorView, 4> & views,
+  const std::array<SensorView, kSensorCount> & views,
   GuardStatus & status) const
 {
   const bool rotate_left = output.angular.z > 0.0;

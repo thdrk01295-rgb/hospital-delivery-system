@@ -5,6 +5,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <cmath>
@@ -12,6 +13,7 @@
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <utility>
@@ -53,7 +55,7 @@ constexpr double kMaxPublishRate = 100.0;
 constexpr double kDefaultMaxRange = 1.2;
 constexpr uint16_t kSentinelInvalidRangeMm = 8000;
 constexpr auto kAllXshutLowDelay = std::chrono::milliseconds(100);
-constexpr auto kSensorPowerUpDelay = std::chrono::milliseconds(100);
+constexpr auto kSensorPowerUpDelay = std::chrono::milliseconds(50);
 
 enum class RangeReadStatus
 {
@@ -227,6 +229,7 @@ struct SensorConfig
   std::string frame_id;
   std::string topic;
   double max_range_m;
+  int read_timeout_ms;
 };
 
 class TofDevice
@@ -237,6 +240,10 @@ public:
   virtual bool ready() const = 0;
   virtual bool initializeFromDefaultAddress(std::string & failure_reason) = 0;
   virtual RangeReadStatus readRangeMeters(double & range_m) = 0;
+  virtual RangeReadStatus pollRangeMeters(double & range_m)
+  {
+    return readRangeMeters(range_m);
+  }
 };
 
 class VL53L0XDevice : public TofDevice
@@ -336,8 +343,10 @@ public:
       return RangeReadStatus::kNotReady;
     }
 
-    uint8_t interrupt_status = 0;
-    for (int i = 0; i < 10; ++i) {
+    const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::milliseconds(config_.read_timeout_ms);
+    while (std::chrono::steady_clock::now() < deadline) {
+      uint8_t interrupt_status = 0;
       if (!readRegister(kResultInterruptStatusReg, interrupt_status)) {
         return RangeReadStatus::kI2cError;
       }
@@ -361,10 +370,45 @@ public:
         range_m = static_cast<double>(range_mm) / 1000.0;
         return RangeReadStatus::kOk;
       }
-      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 
     return RangeReadStatus::kTimeout;
+  }
+
+  RangeReadStatus pollRangeMeters(double & range_m) override
+  {
+    if (!ready_) {
+      return RangeReadStatus::kNotReady;
+    }
+
+    uint8_t interrupt_status = 0;
+    if (!readRegister(kResultInterruptStatusReg, interrupt_status)) {
+      return RangeReadStatus::kI2cError;
+    }
+    if ((interrupt_status & 0x07) == 0) {
+      return RangeReadStatus::kTimeout;
+    }
+
+    uint8_t range_status = 0;
+    uint16_t range_mm = 0;
+    if (!readRegister(kResultRangeStatusReg, range_status) ||
+      !readRegister16(kResultRangeStatusReg + 10, range_mm))
+    {
+      writeRegister(kSystemInterruptClearReg, 0x01);
+      return RangeReadStatus::kI2cError;
+    }
+    writeRegister(kSystemInterruptClearReg, 0x01);
+
+    const auto decoded_status = decodeRangeStatus(range_status);
+    if (decoded_status != RangeReadStatus::kOk) {
+      return decoded_status;
+    }
+    if (range_mm >= kSentinelInvalidRangeMm) {
+      return RangeReadStatus::kSentinelRange;
+    }
+    range_m = static_cast<double>(range_mm) / 1000.0;
+    return RangeReadStatus::kOk;
   }
 
 private:
@@ -539,7 +583,9 @@ public:
       return RangeReadStatus::kNotReady;
     }
 
-    for (int i = 0; i < 20; ++i) {
+    const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::milliseconds(config_.read_timeout_ms);
+    while (std::chrono::steady_clock::now() < deadline) {
       bool ready = false;
       if (!dataReady(ready)) {
         return RangeReadStatus::kI2cError;
@@ -564,10 +610,45 @@ public:
         range_m = static_cast<double>(range_mm) / 1000.0;
         return RangeReadStatus::kOk;
       }
-      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
     return RangeReadStatus::kTimeout;
+  }
+
+  RangeReadStatus pollRangeMeters(double & range_m) override
+  {
+    if (!ready_) {
+      return RangeReadStatus::kNotReady;
+    }
+
+    bool ready = false;
+    if (!dataReady(ready)) {
+      return RangeReadStatus::kI2cError;
+    }
+    if (!ready) {
+      return RangeReadStatus::kTimeout;
+    }
+
+    uint8_t range_status = 0;
+    uint16_t range_mm = 0;
+    if (!readRegister(kVl53l1xResultRangeStatusReg, range_status) ||
+      !readRegister16(kVl53l1xResultFinalRangeMmReg, range_mm))
+    {
+      clearInterrupt();
+      return RangeReadStatus::kI2cError;
+    }
+    clearInterrupt();
+
+    const auto decoded_status = decodeVl53l1xRangeStatus(range_status);
+    if (decoded_status != RangeReadStatus::kOk) {
+      return decoded_status;
+    }
+    if (range_mm >= kSentinelInvalidRangeMm) {
+      return RangeReadStatus::kSentinelRange;
+    }
+    range_m = static_cast<double>(range_mm) / 1000.0;
+    return RangeReadStatus::kOk;
   }
 
 private:
@@ -781,12 +862,18 @@ public:
   : Node("tof_node"),
     gpio_chip_(declare_parameter<std::string>("gpio_chip", "/dev/gpiochip4")),
     i2c_bus_(declare_parameter<int>("i2c_bus", 1)),
-    publish_rate_(declare_parameter<double>("publish_rate", 20.0)),
+    publish_rate_(declare_parameter<double>(
+      "publish_rate_hz", declare_parameter<double>("publish_rate", 20.0))),
+    timeout_sec_(declare_parameter<double>("timeout_sec", 0.5)),
+    read_timeout_ms_(declare_parameter<int>("read_timeout_ms", 500)),
     min_range_(declare_parameter<double>("min_range", 0.03)),
     max_range_(declare_parameter<double>("max_range", kDefaultMaxRange)),
     field_of_view_(declare_parameter<double>("field_of_view", 0.436))
   {
     publish_rate_ = std::clamp(publish_rate_, kMinPublishRate, kMaxPublishRate);
+    publish_period_ms_ = 1000.0 / publish_rate_;
+    timeout_sec_ = std::max(0.001, timeout_sec_);
+    read_timeout_ms_ = std::max(read_timeout_ms_, static_cast<int>(std::round(timeout_sec_ * 1000.0)));
     loadSensors();
     initializeSensors();
 
@@ -795,18 +882,33 @@ public:
     timer_ = create_wall_timer(period, std::bind(&TofNode::timerCallback, this));
   }
 
+  ~TofNode() override
+  {
+    stopSensorWorkers();
+  }
+
 private:
   struct SensorRuntime
   {
     SensorConfig config;
     std::unique_ptr<TofDevice> device;
     rclcpp::Publisher<sensor_msgs::msg::Range>::SharedPtr publisher;
+    std::mutex mutex;
+    std::thread worker;
+    bool worker_running = false;
+    bool available = false;
+    bool has_read = false;
+    RangeReadStatus status = RangeReadStatus::kNotReady;
+    double range_m = std::numeric_limits<double>::quiet_NaN();
+    double read_elapsed_ms = 0.0;
+    rclcpp::Time last_read_time;
+    rclcpp::Time last_ok_time;
   };
 
   void loadSensors()
   {
     const std::vector<std::string> default_sensors = {
-      "front_right", "front_left", "rear_right", "rear_left", "new"};
+      "front_right", "front_left", "rear_right", "rear_left", "rear_center"};
     const auto sensor_names = declare_parameter<std::vector<std::string>>("sensors", default_sensors);
 
     for (const auto & name : orderedSensorNames(sensor_names)) {
@@ -818,6 +920,8 @@ private:
       config.frame_id = declare_parameter<std::string>(name + ".frame_id", defaultFrameId(name));
       config.topic = declare_parameter<std::string>(name + ".topic", "/tof/" + name);
       config.max_range_m = declare_parameter<double>(name + ".max_range_m", defaultMaxRange(name));
+      config.read_timeout_ms = std::max(
+        1, static_cast<int>(declare_parameter<int>(name + ".read_timeout_ms", read_timeout_ms_)));
 
       sensor_configs_.push_back(config);
     }
@@ -841,10 +945,12 @@ private:
       }
       gpios_.push_back(std::move(gpio));
 
-      SensorRuntime runtime;
-      runtime.config = config;
-      runtime.publisher = create_publisher<sensor_msgs::msg::Range>(config.topic, rclcpp::SensorDataQoS());
-      sensor_runtimes_.push_back(std::move(runtime));
+      auto runtime = std::make_shared<SensorRuntime>();
+      runtime->config = config;
+      runtime->publisher = create_publisher<sensor_msgs::msg::Range>(config.topic, rclcpp::SensorDataQoS());
+      runtime->last_read_time = rclcpp::Time(0, 0, get_clock()->get_clock_type());
+      runtime->last_ok_time = rclcpp::Time(0, 0, get_clock()->get_clock_type());
+      sensor_runtimes_.push_back(runtime);
     }
 
     RCLCPP_INFO(
@@ -883,12 +989,16 @@ private:
         get_logger(),
         "Initialized ToF sensor: sensor=%s type=%s xshut_gpio=%d target_address=0x%02X i2c_bus=/dev/i2c-%d",
         config.name.c_str(), sensorTypeToString(config.type), config.xshut_gpio, config.i2c_address, i2c_bus_);
-      sensor_runtimes_[i].device = std::move(sensor);
+      sensor_runtimes_[i]->device = std::move(sensor);
+      sensor_runtimes_[i]->available = true;
+      startSensorWorker(sensor_runtimes_[i]);
     }
 
     const auto ready_count = std::count_if(
       sensor_runtimes_.begin(), sensor_runtimes_.end(),
-      [](const SensorRuntime & runtime) { return runtime.device && runtime.device->ready(); });
+      [](const std::shared_ptr<SensorRuntime> & runtime) {
+        return runtime->device && runtime->device->ready();
+      });
     if (ready_count == 0) {
       RCLCPP_ERROR(get_logger(), "No ToF sensors initialized successfully; node will keep running");
     }
@@ -899,58 +1009,147 @@ private:
     const auto stamp = get_clock()->now();
 
     for (auto & runtime : sensor_runtimes_) {
-      double range = 0.0;
-      auto msg = makeRangeMessage(stamp, runtime.config);
+      auto msg = makeRangeMessage(stamp, runtime->config);
 
-      if (!runtime.device || !runtime.device->ready()) {
+      SensorConfig config;
+      bool available = false;
+      bool has_read = false;
+      RangeReadStatus status = RangeReadStatus::kNotReady;
+      double range = std::numeric_limits<double>::quiet_NaN();
+      double read_elapsed_ms = 0.0;
+      rclcpp::Time last_ok_time(0, 0, get_clock()->get_clock_type());
+
+      {
+        std::lock_guard<std::mutex> lock(runtime->mutex);
+        config = runtime->config;
+        available = runtime->available && runtime->device && runtime->device->ready();
+        has_read = runtime->has_read;
+        status = runtime->status;
+        range = runtime->range_m;
+        read_elapsed_ms = runtime->read_elapsed_ms;
+        last_ok_time = runtime->last_ok_time;
+      }
+
+      if (!available) {
         msg.range = std::numeric_limits<float>::quiet_NaN();
         RCLCPP_WARN_THROTTLE(
-          get_logger(), *get_clock(), 5000, "Invalid ToF reading from %s: sensor unavailable",
-          runtime.config.name.c_str());
-        runtime.publisher->publish(msg);
+          get_logger(), *get_clock(), 5000, "Invalid ToF reading from %s(0x%02X): sensor unavailable",
+          config.name.c_str(), config.i2c_address);
+        runtime->publisher->publish(msg);
         continue;
       }
 
-      const auto status = runtime.device->readRangeMeters(range);
+      if (!has_read || (stamp - last_ok_time).seconds() > timeout_sec_) {
+        status = RangeReadStatus::kTimeout;
+        range = std::numeric_limits<double>::quiet_NaN();
+      }
 
       if (status != RangeReadStatus::kOk) {
         msg.range = invalidRangeForStatus(status);
         RCLCPP_WARN_THROTTLE(
-          get_logger(), *get_clock(), 5000, "Invalid ToF reading from %s: %s",
-          runtime.config.name.c_str(), statusToString(status));
-        runtime.publisher->publish(msg);
+          get_logger(), *get_clock(), 5000, "Invalid ToF reading from %s(0x%02X): %s",
+          config.name.c_str(), config.i2c_address, statusToString(status));
+        runtime->publisher->publish(msg);
         continue;
       }
 
       if (range <= 0.0) {
         msg.range = -std::numeric_limits<float>::infinity();
         RCLCPP_WARN_THROTTLE(
-          get_logger(), *get_clock(), 5000, "Invalid ToF reading from %s: non-positive range %.3f m",
-          runtime.config.name.c_str(), range);
-        runtime.publisher->publish(msg);
+          get_logger(), *get_clock(), 5000, "Invalid ToF reading from %s(0x%02X): non-positive range %.3f m",
+          config.name.c_str(), config.i2c_address, range);
+        runtime->publisher->publish(msg);
         continue;
       }
 
       if (range < min_range_) {
         msg.range = -std::numeric_limits<float>::infinity();
         RCLCPP_WARN_THROTTLE(
-          get_logger(), *get_clock(), 5000, "Invalid ToF reading from %s: below min range %.3f m",
-          runtime.config.name.c_str(), range);
-        runtime.publisher->publish(msg);
+          get_logger(), *get_clock(), 5000, "Invalid ToF reading from %s(0x%02X): below min range %.3f m",
+          config.name.c_str(), config.i2c_address, range);
+        runtime->publisher->publish(msg);
         continue;
       }
 
-      if (range > runtime.config.max_range_m) {
+      if (range > config.max_range_m) {
         msg.range = std::numeric_limits<float>::infinity();
         RCLCPP_WARN_THROTTLE(
-          get_logger(), *get_clock(), 5000, "Invalid ToF reading from %s: above max range %.3f m",
-          runtime.config.name.c_str(), range);
-        runtime.publisher->publish(msg);
+          get_logger(), *get_clock(), 5000, "Invalid ToF reading from %s(0x%02X): above max range %.3f m",
+          config.name.c_str(), config.i2c_address, range);
+        runtime->publisher->publish(msg);
         continue;
+      }
+
+      if (read_elapsed_ms > publish_period_ms_) {
+        RCLCPP_WARN_THROTTLE(
+          get_logger(), *get_clock(), 5000,
+          "ToF read from %s(0x%02X) took %.1f ms, longer than publish period %.1f ms",
+          config.name.c_str(), config.i2c_address, read_elapsed_ms, publish_period_ms_);
       }
 
       msg.range = static_cast<float>(range);
-      runtime.publisher->publish(msg);
+      runtime->publisher->publish(msg);
+    }
+  }
+
+  void startSensorWorker(const std::shared_ptr<SensorRuntime> & runtime)
+  {
+    runtime->worker_running = true;
+    runtime->worker = std::thread([this, runtime]() {
+      const auto read_period = std::chrono::duration<double>(1.0 / publish_rate_);
+      while (!stop_workers_.load()) {
+        const auto cycle_start = std::chrono::steady_clock::now();
+        double range = std::numeric_limits<double>::quiet_NaN();
+        RangeReadStatus status = RangeReadStatus::kNotReady;
+        if (runtime->device && runtime->device->ready()) {
+          if (runtime->config.type == SensorType::kVl53l1x) {
+            status = runtime->device->pollRangeMeters(range);
+          } else {
+            status = runtime->device->readRangeMeters(range);
+          }
+        }
+        const auto elapsed_ms = std::chrono::duration<double, std::milli>(
+          std::chrono::steady_clock::now() - cycle_start).count();
+        const auto now = get_clock()->now();
+
+        {
+          std::lock_guard<std::mutex> lock(runtime->mutex);
+          runtime->has_read = true;
+          runtime->status = status;
+          runtime->range_m = status == RangeReadStatus::kOk ? range : std::numeric_limits<double>::quiet_NaN();
+          runtime->read_elapsed_ms = elapsed_ms;
+          runtime->last_read_time = now;
+          if (status == RangeReadStatus::kOk) {
+            runtime->last_ok_time = now;
+          }
+        }
+
+        RCLCPP_DEBUG(
+          get_logger(), "ToF read %s(0x%02X): status=%s duration=%.1f ms",
+          runtime->config.name.c_str(), runtime->config.i2c_address, statusToString(status), elapsed_ms);
+
+        if (elapsed_ms > publish_period_ms_) {
+          RCLCPP_WARN_THROTTLE(
+            get_logger(), *get_clock(), 5000,
+            "ToF read from %s(0x%02X) took %.1f ms, longer than publish period %.1f ms",
+            runtime->config.name.c_str(), runtime->config.i2c_address, elapsed_ms, publish_period_ms_);
+        }
+
+        const auto elapsed = std::chrono::steady_clock::now() - cycle_start;
+        if (elapsed < read_period) {
+          std::this_thread::sleep_for(read_period - elapsed);
+        }
+      }
+    });
+  }
+
+  void stopSensorWorkers()
+  {
+    stop_workers_.store(true);
+    for (auto & runtime : sensor_runtimes_) {
+      if (runtime->worker.joinable()) {
+        runtime->worker.join();
+      }
     }
   }
 
@@ -986,7 +1185,7 @@ private:
 
   std::string defaultType(const std::string & name) const
   {
-    if (name == "new") {
+    if (name == "rear_center" || name == "new") {
       return "VL53L1X";
     }
     return "VL53L0X";
@@ -994,7 +1193,7 @@ private:
 
   double defaultMaxRange(const std::string & name) const
   {
-    if (name == "new") {
+    if (name == "rear_center" || name == "new") {
       return 2.0;
     }
     return max_range_;
@@ -1014,7 +1213,7 @@ private:
     if (name == "rear_left") {
       return 23;
     }
-    if (name == "new") {
+    if (name == "rear_center" || name == "new") {
       return 25;
     }
     return 0;
@@ -1023,7 +1222,7 @@ private:
   std::vector<std::string> orderedSensorNames(const std::vector<std::string> & sensor_names) const
   {
     const std::vector<std::string> init_order = {
-      "front_right", "front_left", "rear_right", "rear_left", "new"};
+      "front_right", "front_left", "rear_right", "rear_left", "rear_center"};
     std::vector<std::string> ordered_names;
     ordered_names.reserve(sensor_names.size());
 
@@ -1056,7 +1255,7 @@ private:
     if (name == "rear_left") {
       return 0x33;
     }
-    if (name == "new") {
+    if (name == "rear_center" || name == "new") {
       return 0x34;
     }
     return 0x30;
@@ -1076,8 +1275,8 @@ private:
     if (name == "rear_left") {
       return "tof_rear_left_link";
     }
-    if (name == "new") {
-      return "tof_new_link";
+    if (name == "rear_center" || name == "new") {
+      return "tof_rear_center_link";
     }
     return "tof_" + name + "_link";
   }
@@ -1085,13 +1284,17 @@ private:
   std::string gpio_chip_;
   int i2c_bus_;
   double publish_rate_;
+  double publish_period_ms_;
+  double timeout_sec_;
+  int read_timeout_ms_;
   double min_range_;
   double max_range_;
   double field_of_view_;
   std::vector<SensorConfig> sensor_configs_;
-  std::vector<SensorRuntime> sensor_runtimes_;
+  std::vector<std::shared_ptr<SensorRuntime>> sensor_runtimes_;
   std::vector<std::unique_ptr<GpiodGpio>> gpios_;
   rclcpp::TimerBase::SharedPtr timer_;
+  std::atomic_bool stop_workers_{false};
 };
 
 }  // namespace sensor_components

@@ -25,7 +25,10 @@ private:
     kFrontRight = 1,
     kRearLeft = 2,
     kRearRight = 3,
+    kRearCenter = 4,
   };
+
+  static constexpr std::size_t kSensorCount = 5;
 
   enum class SensorValidity
   {
@@ -70,11 +73,11 @@ private:
   bool sensorIsInvalidForMotion(const SensorView & sensor) const;
   void applyReverseGuard(
     geometry_msgs::msg::Twist & output,
-    const std::array<SensorView, 4> & views,
+    const std::array<SensorView, kSensorCount> & views,
     GuardStatus & status) const;
   void applyRotateGuard(
     geometry_msgs::msg::Twist & output,
-    const std::array<SensorView, 4> & views,
+    const std::array<SensorView, kSensorCount> & views,
     GuardStatus & status) const;
   void publishStatus(const GuardStatus & status, const rclcpp::Time & now);
   void updateStatus(
@@ -89,7 +92,7 @@ private:
   std::string sensorName(SensorIndex index) const;
   std::string joinSensors(const std::string & first, const std::string & second) const;
 
-  std::array<SensorState, 4> sensors_;
+  std::array<SensorState, kSensorCount> sensors_;
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_sub_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_pub_;
   rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr status_pub_;

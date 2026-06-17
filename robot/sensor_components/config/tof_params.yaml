@@ -2,7 +2,10 @@ tof_node:
   ros__parameters:
     gpio_chip: "/dev/gpiochip4"
     i2c_bus: 1
+    publish_rate_hz: 20.0
     publish_rate: 20.0
+    timeout_sec: 0.5
+    read_timeout_ms: 500
     min_range: 0.03
     max_range: 1.2
     field_of_view: 0.436
@@ -11,7 +14,7 @@ tof_node:
       - front_left
       - rear_right
       - rear_left
-      - new
+      - rear_center
     front_right:
       type: "VL53L0X"
       xshut_gpio: 17
@@ -19,6 +22,7 @@ tof_node:
       frame_id: "tof_front_right_link"
       topic: "/tof/front_right"
       max_range_m: 1.2
+      read_timeout_ms: 500
     front_left:
       type: "VL53L0X"
       xshut_gpio: 27
@@ -26,6 +30,7 @@ tof_node:
       frame_id: "tof_front_left_link"
       topic: "/tof/front_left"
       max_range_m: 1.2
+      read_timeout_ms: 500
     rear_right:
       type: "VL53L0X"
       xshut_gpio: 22
@@ -33,6 +38,7 @@ tof_node:
       frame_id: "tof_rear_right_link"
       topic: "/tof/rear_right"
       max_range_m: 1.2
+      read_timeout_ms: 500
     rear_left:
       type: "VL53L0X"
       xshut_gpio: 23
@@ -40,10 +46,12 @@ tof_node:
       frame_id: "tof_rear_left_link"
       topic: "/tof/rear_left"
       max_range_m: 1.2
-    new:
+      read_timeout_ms: 500
+    rear_center:
       type: "VL53L1X"
       xshut_gpio: 25
       i2c_address: 0x34
-      frame_id: "tof_new_link"
-      topic: "/tof/new"
+      frame_id: "tof_rear_center_link"
+      topic: "/tof/rear_center"
       max_range_m: 2.0
+      read_timeout_ms: 500
