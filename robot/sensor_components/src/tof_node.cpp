@@ -873,7 +873,7 @@ public:
     publish_rate_ = std::clamp(publish_rate_, kMinPublishRate, kMaxPublishRate);
     publish_period_ms_ = 1000.0 / publish_rate_;
     timeout_sec_ = std::max(0.001, timeout_sec_);
-    read_timeout_ms_ = std::max(read_timeout_ms_, static_cast<int>(std::round(timeout_sec_ * 1000.0)));
+    read_timeout_ms_ = std::max(1, read_timeout_ms_);
     loadSensors();
     initializeSensors();
 
@@ -922,6 +922,12 @@ private:
       config.max_range_m = declare_parameter<double>(name + ".max_range_m", defaultMaxRange(name));
       config.read_timeout_ms = std::max(
         1, static_cast<int>(declare_parameter<int>(name + ".read_timeout_ms", read_timeout_ms_)));
+      if (static_cast<double>(config.read_timeout_ms) > publish_period_ms_) {
+        RCLCPP_WARN(
+          get_logger(),
+          "%s(0x%02X) read_timeout_ms=%d is longer than publish period %.1f ms",
+          config.name.c_str(), config.i2c_address, config.read_timeout_ms, publish_period_ms_);
+      }
 
       sensor_configs_.push_back(config);
     }
@@ -987,8 +993,9 @@ private:
 
       RCLCPP_INFO(
         get_logger(),
-        "Initialized ToF sensor: sensor=%s type=%s xshut_gpio=%d target_address=0x%02X i2c_bus=/dev/i2c-%d",
-        config.name.c_str(), sensorTypeToString(config.type), config.xshut_gpio, config.i2c_address, i2c_bus_);
+        "Initialized ToF sensor: %s(0x%02X) type=%s xshut_gpio=%d i2c_bus=/dev/i2c-%d read_timeout_ms=%d",
+        config.name.c_str(), config.i2c_address, sensorTypeToString(config.type), config.xshut_gpio, i2c_bus_,
+        config.read_timeout_ms);
       sensor_runtimes_[i]->device = std::move(sensor);
       sensor_runtimes_[i]->available = true;
       startSensorWorker(sensor_runtimes_[i]);
@@ -1125,8 +1132,9 @@ private:
         }
 
         RCLCPP_DEBUG(
-          get_logger(), "ToF read %s(0x%02X): status=%s duration=%.1f ms",
-          runtime->config.name.c_str(), runtime->config.i2c_address, statusToString(status), elapsed_ms);
+          get_logger(), "ToF read %s(0x%02X): status=%s duration=%.1f ms read_timeout_ms=%d",
+          runtime->config.name.c_str(), runtime->config.i2c_address, statusToString(status), elapsed_ms,
+          runtime->config.read_timeout_ms);
 
         if (elapsed_ms > publish_period_ms_) {
           RCLCPP_WARN_THROTTLE(
