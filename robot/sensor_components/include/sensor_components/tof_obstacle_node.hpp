@@ -26,6 +26,7 @@ private:
     std::string name;
     std::string topic;
     std::string frame_id;
+    double max_valid_range;
     rclcpp::Subscription<sensor_msgs::msg::Range>::SharedPtr subscription;
     sensor_msgs::msg::Range::SharedPtr last_msg;
     rclcpp::Time last_received;
@@ -33,7 +34,7 @@ private:
 
   void rangeCallback(const sensor_msgs::msg::Range::SharedPtr msg, std::size_t sensor_index);
   void timerCallback();
-  bool rangeIsValid(const sensor_msgs::msg::Range & msg) const;
+  bool rangeIsValid(const SensorState & sensor, const sensor_msgs::msg::Range & msg) const;
   bool sensorIsFresh(const SensorState & sensor, const rclcpp::Time & now) const;
   bool transformObstaclePoint(
     const SensorState & sensor,

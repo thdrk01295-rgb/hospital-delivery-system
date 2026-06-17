@@ -59,6 +59,7 @@ void TofObstacleNode::loadSensors()
     "front_right",
     "rear_left",
     "rear_right",
+    "new",
   };
   const std::vector<std::string> sensor_names =
     declare_parameter<std::vector<std::string>>("sensors", default_sensor_names);
@@ -70,6 +71,7 @@ void TofObstacleNode::loadSensors()
     sensor.name = name;
     sensor.topic = declare_parameter<std::string>(prefix + "topic", "/tof/" + name);
     sensor.frame_id = declare_parameter<std::string>(prefix + "frame_id", "tof_" + name + "_link");
+    sensor.max_valid_range = declare_parameter<double>(prefix + "max_valid_range", max_valid_range_);
     sensor.last_received = rclcpp::Time(0, 0, get_clock()->get_clock_type());
 
     sensors_.push_back(sensor);
@@ -102,7 +104,7 @@ void TofObstacleNode::timerCallback()
   points.reserve(sensors_.size());
 
   for (const auto & sensor : sensors_) {
-    if (!sensor.last_msg || !sensorIsFresh(sensor, now) || !rangeIsValid(*sensor.last_msg)) {
+    if (!sensor.last_msg || !sensorIsFresh(sensor, now) || !rangeIsValid(sensor, *sensor.last_msg)) {
       continue;
     }
 
@@ -115,9 +117,11 @@ void TofObstacleNode::timerCallback()
   cloud_pub_->publish(makePointCloud(points, now));
 }
 
-bool TofObstacleNode::rangeIsValid(const sensor_msgs::msg::Range & msg) const
+bool TofObstacleNode::rangeIsValid(
+  const SensorState & sensor,
+  const sensor_msgs::msg::Range & msg) const
 {
-  return std::isfinite(msg.range) && msg.range >= min_valid_range_ && msg.range <= max_valid_range_;
+  return std::isfinite(msg.range) && msg.range >= min_valid_range_ && msg.range <= sensor.max_valid_range;
 }
 
 bool TofObstacleNode::sensorIsFresh(const SensorState & sensor, const rclcpp::Time & now) const

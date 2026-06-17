@@ -11,11 +11,19 @@ tof_obstacle_node:
       - "front_right"
       - "rear_left"
       - "rear_right"
+      - "new"
     sensors.front_left.topic: "/tof/front_left"
     sensors.front_left.frame_id: "tof_front_left_link"
+    sensors.front_left.max_valid_range: 1.2
     sensors.front_right.topic: "/tof/front_right"
     sensors.front_right.frame_id: "tof_front_right_link"
+    sensors.front_right.max_valid_range: 1.2
     sensors.rear_left.topic: "/tof/rear_left"
     sensors.rear_left.frame_id: "tof_rear_left_link"
+    sensors.rear_left.max_valid_range: 1.2
     sensors.rear_right.topic: "/tof/rear_right"
     sensors.rear_right.frame_id: "tof_rear_right_link"
+    sensors.rear_right.max_valid_range: 1.2
+    sensors.new.topic: "/tof/new"
+    sensors.new.frame_id: "tof_new_link"
+    sensors.new.max_valid_range: 2.0
