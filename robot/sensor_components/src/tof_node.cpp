@@ -59,6 +59,7 @@ constexpr uint16_t kVl53l1xRangeConfigTimeoutMacroAReg = 0x005E;
 constexpr uint16_t kVl53l1xRangeConfigTimeoutMacroBReg = 0x0061;
 constexpr uint16_t kVl53l1xResultRangeStatusReg = 0x0089;
 constexpr uint16_t kVl53l1xResultFinalRangeMmReg = 0x0096;
+constexpr uint16_t kVl53l1xInterMeasurementPeriodReg = 0x006C;
 constexpr uint16_t kExpectedVl53l1xModelId = 0xEACC;
 constexpr double kMinPublishRate = 1.0;
 constexpr double kMaxPublishRate = 100.0;
@@ -299,6 +300,8 @@ struct SensorConfig
   std::string topic;
   double max_range_m;
   int read_timeout_ms;
+  int timing_budget_ms;
+  int inter_measurement_ms;
 };
 
 class TofDevice
@@ -817,7 +820,9 @@ class VL53L1XDevice : public TofDevice
 {
 public:
   VL53L1XDevice(SensorConfig config, int i2c_bus)
-  : config_(std::move(config)), i2c_bus_(i2c_bus), i2c_fd_(-1), ready_(false)
+  : config_(std::move(config)), i2c_bus_(i2c_bus), i2c_fd_(-1), ready_(false),
+    last_data_ready_(false), last_mux_ctrl_(0), last_gpio_status_(0), last_mode_start_(0),
+    last_range_status_(0), last_range_mm_(0), last_inter_measurement_raw_(0)
   {
   }
 
@@ -910,7 +915,10 @@ public:
           clearInterrupt();
           return RangeReadStatus::kI2cError;
         }
+        last_range_status_ = range_status;
+        last_range_mm_ = range_mm;
         clearInterrupt();
+        range_m = static_cast<double>(range_mm) / 1000.0;
         const auto decoded_status = decodeVl53l1xRangeStatus(range_status);
         if (decoded_status != RangeReadStatus::kOk) {
           return decoded_status;
@@ -918,7 +926,6 @@ public:
         if (range_mm >= kSentinelInvalidRangeMm) {
           return RangeReadStatus::kSentinelRange;
         }
-        range_m = static_cast<double>(range_mm) / 1000.0;
         return RangeReadStatus::kOk;
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -949,7 +956,10 @@ public:
       clearInterrupt();
       return RangeReadStatus::kI2cError;
     }
+    last_range_status_ = range_status;
+    last_range_mm_ = range_mm;
     clearInterrupt();
+    range_m = static_cast<double>(range_mm) / 1000.0;
 
     const auto decoded_status = decodeVl53l1xRangeStatus(range_status);
     if (decoded_status != RangeReadStatus::kOk) {
@@ -958,8 +968,19 @@ public:
     if (range_mm >= kSentinelInvalidRangeMm) {
       return RangeReadStatus::kSentinelRange;
     }
-    range_m = static_cast<double>(range_mm) / 1000.0;
     return RangeReadStatus::kOk;
+  }
+
+  std::string debugState() const override
+  {
+    char buffer[192];
+    std::snprintf(
+      buffer, sizeof(buffer),
+      "vl53l1x_regs=data_ready=%s mux_ctrl=0x%02X gpio_status=0x%02X mode_start=0x%02X range_status_raw=0x%02X raw_range_mm=%u timing_budget_ms=%d inter_measurement_raw=0x%08X",
+      last_data_ready_ ? "true" : "false", last_mux_ctrl_, last_gpio_status_, last_mode_start_,
+      last_range_status_, static_cast<unsigned>(last_range_mm_), config_.timing_budget_ms,
+      static_cast<unsigned>(last_inter_measurement_raw_));
+    return buffer;
   }
 
 private:
@@ -1042,19 +1063,63 @@ private:
     {
       return false;
     }
-    return writeRegister16(kVl53l1xRangeConfigTimeoutMacroAReg, 0x00AD) &&
-           writeRegister16(kVl53l1xRangeConfigTimeoutMacroBReg, 0x00C6) &&
+    if (!readRegister32(kVl53l1xInterMeasurementPeriodReg, last_inter_measurement_raw_)) {
+      return false;
+    }
+    return configureTimingBudget() &&
            startRanging();
+  }
+
+  bool configureTimingBudget()
+  {
+    uint16_t timeout_a = 0x00AD;
+    uint16_t timeout_b = 0x00C6;
+    switch (config_.timing_budget_ms) {
+      case 20:
+        timeout_a = 0x001E;
+        timeout_b = 0x0022;
+        break;
+      case 33:
+        timeout_a = 0x0060;
+        timeout_b = 0x006E;
+        break;
+      case 50:
+        timeout_a = 0x00AD;
+        timeout_b = 0x00C6;
+        break;
+      case 100:
+        timeout_a = 0x01CC;
+        timeout_b = 0x01EA;
+        break;
+      case 200:
+        timeout_a = 0x02D9;
+        timeout_b = 0x02F8;
+        break;
+      case 500:
+        timeout_a = 0x048F;
+        timeout_b = 0x04A4;
+        break;
+      default:
+        return false;
+    }
+    return writeRegister16(kVl53l1xRangeConfigTimeoutMacroAReg, timeout_a) &&
+           writeRegister16(kVl53l1xRangeConfigTimeoutMacroBReg, timeout_b);
   }
 
   bool startRanging()
   {
-    return writeRegister(kVl53l1xSystemModeStartReg, 0x40);
+    if (!writeRegister(kVl53l1xSystemModeStartReg, 0x40)) {
+      return false;
+    }
+    return readRegister(kVl53l1xSystemModeStartReg, last_mode_start_);
   }
 
   bool stopRanging()
   {
-    return writeRegister(kVl53l1xSystemModeStartReg, 0x00);
+    if (!writeRegister(kVl53l1xSystemModeStartReg, 0x00)) {
+      return false;
+    }
+    return readRegister(kVl53l1xSystemModeStartReg, last_mode_start_);
   }
 
   bool clearInterrupt()
@@ -1087,8 +1152,11 @@ private:
     {
       return false;
     }
+    last_mux_ctrl_ = mux_ctrl;
+    last_gpio_status_ = gpio_status;
     const uint8_t interrupt_polarity = (mux_ctrl & 0x10) != 0 ? 0 : 1;
     ready = (gpio_status & 0x01) == interrupt_polarity;
+    last_data_ready_ = ready;
     return true;
   }
 
@@ -1152,6 +1220,26 @@ private:
     return true;
   }
 
+  bool readRegister32(uint16_t reg, uint32_t & value)
+  {
+    uint8_t data[4] = {0, 0, 0, 0};
+    const uint8_t reg_bytes[2] = {
+      static_cast<uint8_t>(reg >> 8),
+      static_cast<uint8_t>(reg & 0xFF),
+    };
+    if (::write(i2c_fd_, reg_bytes, sizeof(reg_bytes)) != static_cast<ssize_t>(sizeof(reg_bytes))) {
+      return false;
+    }
+    if (::read(i2c_fd_, data, sizeof(data)) != static_cast<ssize_t>(sizeof(data))) {
+      return false;
+    }
+    value = (static_cast<uint32_t>(data[0]) << 24) |
+            (static_cast<uint32_t>(data[1]) << 16) |
+            (static_cast<uint32_t>(data[2]) << 8) |
+            static_cast<uint32_t>(data[3]);
+    return true;
+  }
+
   void closeBus()
   {
     if (i2c_fd_ >= 0) {
@@ -1164,6 +1252,13 @@ private:
   int i2c_bus_;
   int i2c_fd_;
   bool ready_;
+  bool last_data_ready_;
+  uint8_t last_mux_ctrl_;
+  uint8_t last_gpio_status_;
+  uint8_t last_mode_start_;
+  uint8_t last_range_status_;
+  uint16_t last_range_mm_;
+  uint32_t last_inter_measurement_raw_;
 };
 
 class TofNode : public rclcpp::Node
@@ -1211,7 +1306,9 @@ private:
     bool available = false;
     bool has_read = false;
     RangeReadStatus status = RangeReadStatus::kNotReady;
+    RangeReadStatus last_valid_status = RangeReadStatus::kNotReady;
     double range_m = std::numeric_limits<double>::quiet_NaN();
+    double last_valid_range_m = std::numeric_limits<double>::quiet_NaN();
     double read_elapsed_ms = 0.0;
     rclcpp::Time last_read_time;
     rclcpp::Time last_ok_time;
@@ -1234,11 +1331,30 @@ private:
       config.max_range_m = declare_parameter<double>(name + ".max_range_m", defaultMaxRange(name));
       config.read_timeout_ms = std::max(
         1, static_cast<int>(declare_parameter<int>(name + ".read_timeout_ms", read_timeout_ms_)));
+      config.timing_budget_ms = std::max(
+        1, static_cast<int>(declare_parameter<int>(name + ".timing_budget_ms", defaultTimingBudgetMs(name))));
+      config.inter_measurement_ms = std::max(
+        1, static_cast<int>(
+          declare_parameter<int>(name + ".inter_measurement_ms", defaultInterMeasurementMs(name))));
       if (static_cast<double>(config.read_timeout_ms) > publish_period_ms_) {
         RCLCPP_WARN(
           get_logger(),
           "%s(0x%02X) read_timeout_ms=%d is longer than publish period %.1f ms",
           config.name.c_str(), config.i2c_address, config.read_timeout_ms, publish_period_ms_);
+      }
+      if (config.type == SensorType::kVl53l1x && config.read_timeout_ms <= config.timing_budget_ms) {
+        RCLCPP_WARN(
+          get_logger(),
+          "%s(0x%02X) VL53L1X read_timeout_ms=%d is not greater than timing_budget_ms=%d; data_ready may be missed",
+          config.name.c_str(), config.i2c_address, config.read_timeout_ms, config.timing_budget_ms);
+      }
+      if (config.type == SensorType::kVl53l1x &&
+        publish_period_ms_ < static_cast<double>(config.inter_measurement_ms))
+      {
+        RCLCPP_WARN(
+          get_logger(),
+          "%s(0x%02X) VL53L1X publish period %.1f ms is shorter than inter_measurement_ms=%d; some cycles may skip data_ready",
+          config.name.c_str(), config.i2c_address, publish_period_ms_, config.inter_measurement_ms);
       }
 
       sensor_configs_.push_back(config);
@@ -1305,9 +1421,9 @@ private:
 
       RCLCPP_INFO(
         get_logger(),
-        "Initialized ToF sensor: %s(0x%02X) type=%s xshut_gpio=%d i2c_bus=/dev/i2c-%d read_timeout_ms=%d",
+        "Initialized ToF sensor: %s(0x%02X) type=%s xshut_gpio=%d i2c_bus=/dev/i2c-%d read_timeout_ms=%d timing_budget_ms=%d inter_measurement_ms=%d",
         config.name.c_str(), config.i2c_address, sensorTypeToString(config.type), config.xshut_gpio, i2c_bus_,
-        config.read_timeout_ms);
+        config.read_timeout_ms, config.timing_budget_ms, config.inter_measurement_ms);
       sensor_runtimes_[i]->device = std::move(sensor);
       sensor_runtimes_[i]->available = true;
       startSensorWorker(sensor_runtimes_[i]);
@@ -1335,7 +1451,9 @@ private:
       bool has_read = false;
       RangeReadStatus status = RangeReadStatus::kNotReady;
       double range = std::numeric_limits<double>::quiet_NaN();
+      double last_valid_range = std::numeric_limits<double>::quiet_NaN();
       double read_elapsed_ms = 0.0;
+      RangeReadStatus last_valid_status = RangeReadStatus::kNotReady;
       rclcpp::Time last_ok_time(0, 0, get_clock()->get_clock_type());
 
       {
@@ -1345,6 +1463,8 @@ private:
         has_read = runtime->has_read;
         status = runtime->status;
         range = runtime->range_m;
+        last_valid_status = runtime->last_valid_status;
+        last_valid_range = runtime->last_valid_range_m;
         read_elapsed_ms = runtime->read_elapsed_ms;
         last_ok_time = runtime->last_ok_time;
       }
@@ -1356,6 +1476,19 @@ private:
           config.name.c_str(), config.i2c_address);
         runtime->publisher->publish(msg);
         continue;
+      }
+
+      const bool accepted_as_valid =
+        accept_invalid_status_range_ && rangeStatusIsInvalid(status) &&
+        range >= min_range_ && range <= config.max_range_m;
+      if (accepted_as_valid) {
+        std::lock_guard<std::mutex> lock(runtime->mutex);
+        runtime->last_ok_time = stamp;
+        runtime->last_valid_status = status;
+        runtime->last_valid_range_m = range;
+        last_ok_time = stamp;
+        last_valid_status = status;
+        last_valid_range = range;
       }
 
       const bool has_valid_sample = last_ok_time.nanoseconds() > 0;
@@ -1373,8 +1506,9 @@ private:
         msg.range = std::numeric_limits<float>::quiet_NaN();
         RCLCPP_WARN_THROTTLE(
           get_logger(), *get_clock(), 5000,
-          "Invalid ToF reading from %s(0x%02X): stale_timeout last_valid_age=%.3f sec last_status=%s",
-          config.name.c_str(), config.i2c_address, (stamp - last_ok_time).seconds(), statusToString(status));
+          "Invalid ToF reading from %s(0x%02X): stale_timeout last_valid_age=%.3f sec last_valid_status=%s last_valid_range=%.3f m current_status=%s",
+          config.name.c_str(), config.i2c_address, (stamp - last_ok_time).seconds(),
+          statusToString(last_valid_status), last_valid_range, statusToString(status));
         runtime->publisher->publish(msg);
         continue;
       }
@@ -1400,12 +1534,10 @@ private:
           continue;
         }
 
-        if (accept_invalid_status_range_ && rangeStatusIsInvalid(status) &&
-          range >= min_range_ && range <= config.max_range_m)
-        {
+        if (accepted_as_valid) {
           RCLCPP_WARN_THROTTLE(
             get_logger(), *get_clock(), 5000,
-            "Accepting ToF reading from %s(0x%02X) despite range_status_invalid: status=%s range=%.3f m",
+            "ToF reading from %s(0x%02X) accepted_as_valid despite range_status_invalid: status=%s range=%.3f m",
             config.name.c_str(), config.i2c_address, statusToString(status), range);
           msg.range = static_cast<float>(range);
           runtime->publisher->publish(msg);
@@ -1470,11 +1602,7 @@ private:
         double range = std::numeric_limits<double>::quiet_NaN();
         RangeReadStatus status = RangeReadStatus::kNotReady;
         if (runtime->device && runtime->device->ready()) {
-          if (runtime->config.type == SensorType::kVl53l1x) {
-            status = runtime->device->pollRangeMeters(range);
-          } else {
-            status = runtime->device->readRangeMeters(range);
-          }
+          status = runtime->device->readRangeMeters(range);
         }
         const std::string debug_state = runtime->device ? runtime->device->debugState() : std::string();
         const auto elapsed_ms = std::chrono::duration<double, std::milli>(
@@ -1493,6 +1621,8 @@ private:
           runtime->last_read_time = now;
           if (status == RangeReadStatus::kOk || accepted_invalid_status) {
             runtime->last_ok_time = now;
+            runtime->last_valid_status = status;
+            runtime->last_valid_range_m = range;
           }
         }
 
@@ -1570,6 +1700,22 @@ private:
       return 2.0;
     }
     return max_range_;
+  }
+
+  int defaultTimingBudgetMs(const std::string & name) const
+  {
+    if (defaultType(name) == "VL53L1X") {
+      return 50;
+    }
+    return 20;
+  }
+
+  int defaultInterMeasurementMs(const std::string & name) const
+  {
+    if (defaultType(name) == "VL53L1X") {
+      return 50;
+    }
+    return 20;
   }
 
   int defaultXshut(const std::string & name) const

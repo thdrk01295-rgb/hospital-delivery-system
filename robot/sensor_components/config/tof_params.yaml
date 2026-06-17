@@ -24,6 +24,8 @@ tof_node:
       topic: "/tof/front_right"
       max_range_m: 1.2
       read_timeout_ms: 20
+      timing_budget_ms: 20
+      inter_measurement_ms: 20
     front_left:
       type: "VL53L0X"
       xshut_gpio: 27
@@ -32,6 +34,8 @@ tof_node:
       topic: "/tof/front_left"
       max_range_m: 1.2
       read_timeout_ms: 20
+      timing_budget_ms: 20
+      inter_measurement_ms: 20
     rear_right:
       type: "VL53L0X"
       xshut_gpio: 22
@@ -40,6 +44,8 @@ tof_node:
       topic: "/tof/rear_right"
       max_range_m: 1.2
       read_timeout_ms: 20
+      timing_budget_ms: 20
+      inter_measurement_ms: 20
     rear_left:
       type: "VL53L0X"
       xshut_gpio: 23
@@ -48,6 +54,8 @@ tof_node:
       topic: "/tof/rear_left"
       max_range_m: 1.2
       read_timeout_ms: 20
+      timing_budget_ms: 20
+      inter_measurement_ms: 20
     rear_center:
       type: "VL53L1X"
       xshut_gpio: 25
@@ -55,4 +63,6 @@ tof_node:
       frame_id: "tof_rear_center_link"
       topic: "/tof/rear_center"
       max_range_m: 2.0
-      read_timeout_ms: 20
+      read_timeout_ms: 80
+      timing_budget_ms: 50
+      inter_measurement_ms: 50
