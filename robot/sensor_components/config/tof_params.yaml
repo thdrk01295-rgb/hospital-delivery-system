@@ -6,6 +6,7 @@ tof_node:
     publish_rate: 20.0
     timeout_sec: 0.5
     read_timeout_ms: 20
+    accept_invalid_status_range: false
     min_range: 0.03
     max_range: 1.2
     field_of_view: 0.436

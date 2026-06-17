@@ -125,7 +125,7 @@ std::string errnoString()
 
 RangeReadStatus decodeRangeStatus(uint8_t range_status)
 {
-  const uint8_t status = (range_status & 0x78) >> 3;
+  const uint8_t status = (range_status >> 3) & 0x0F;
   switch (status) {
     case 0:
       return RangeReadStatus::kOk;
@@ -139,9 +139,67 @@ RangeReadStatus decodeRangeStatus(uint8_t range_status)
       return RangeReadStatus::kPhaseFail;
     case 5:
       return RangeReadStatus::kHardwareFail;
+    case 6:
+      return RangeReadStatus::kPhaseFail;
+    case 7:
+      return RangeReadStatus::kHardwareFail;
+    case 8:
+      return RangeReadStatus::kMinRangeFail;
+    case 9:
+      return RangeReadStatus::kOutOfRange;
+    case 10:
+      return RangeReadStatus::kSignalFail;
+    case 11:
+      return RangeReadStatus::kOutOfRange;
+    case 12:
+      return RangeReadStatus::kMinRangeFail;
     default:
       return RangeReadStatus::kUnknownFailure;
   }
+}
+
+bool rangeStatusIsInvalid(RangeReadStatus status)
+{
+  switch (status) {
+    case RangeReadStatus::kSignalFail:
+    case RangeReadStatus::kPhaseFail:
+    case RangeReadStatus::kMinRangeFail:
+    case RangeReadStatus::kOutOfRange:
+    case RangeReadStatus::kHardwareFail:
+    case RangeReadStatus::kUnknownFailure:
+      return true;
+    case RangeReadStatus::kOk:
+    case RangeReadStatus::kNotReady:
+    case RangeReadStatus::kI2cError:
+    case RangeReadStatus::kTimeout:
+    case RangeReadStatus::kSentinelRange:
+      return false;
+  }
+  return false;
+}
+
+const char * invalidReasonForStatus(RangeReadStatus status)
+{
+  switch (status) {
+    case RangeReadStatus::kTimeout:
+      return "read_timeout";
+    case RangeReadStatus::kSignalFail:
+    case RangeReadStatus::kPhaseFail:
+    case RangeReadStatus::kMinRangeFail:
+    case RangeReadStatus::kOutOfRange:
+    case RangeReadStatus::kHardwareFail:
+    case RangeReadStatus::kUnknownFailure:
+      return "range_status_invalid";
+    case RangeReadStatus::kSentinelRange:
+      return "above_max";
+    case RangeReadStatus::kNotReady:
+      return "not_ready";
+    case RangeReadStatus::kI2cError:
+      return "i2c_error";
+    case RangeReadStatus::kOk:
+      return "ok";
+  }
+  return "unknown";
 }
 
 RangeReadStatus decodeVl53l1xRangeStatus(uint8_t range_status)
@@ -266,7 +324,7 @@ class VL53L0XDevice : public TofDevice
 public:
   VL53L0XDevice(SensorConfig config, int i2c_bus)
   : config_(std::move(config)), i2c_bus_(i2c_bus), i2c_fd_(-1), ready_(false), stop_variable_(0),
-    last_interrupt_status_(0), last_range_status_(0), last_sysrange_start_(0)
+    last_interrupt_status_(0), last_range_status_(0), last_sysrange_start_(0), last_range_mm_(0)
   {
   }
 
@@ -382,7 +440,9 @@ public:
           return RangeReadStatus::kI2cError;
         }
         last_range_status_ = range_status;
+        last_range_mm_ = range_mm;
         writeRegister(kSystemInterruptClearReg, 0x01);
+        range_m = static_cast<double>(range_mm) / 1000.0;
         const auto decoded_status = decodeRangeStatus(range_status);
         if (decoded_status != RangeReadStatus::kOk) {
           return decoded_status;
@@ -390,7 +450,6 @@ public:
         if (range_mm >= kSentinelInvalidRangeMm) {
           return RangeReadStatus::kSentinelRange;
         }
-        range_m = static_cast<double>(range_mm) / 1000.0;
         return RangeReadStatus::kOk;
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
@@ -423,7 +482,9 @@ public:
       return RangeReadStatus::kI2cError;
     }
     last_range_status_ = range_status;
+    last_range_mm_ = range_mm;
     writeRegister(kSystemInterruptClearReg, 0x01);
+    range_m = static_cast<double>(range_mm) / 1000.0;
 
     const auto decoded_status = decodeRangeStatus(range_status);
     if (decoded_status != RangeReadStatus::kOk) {
@@ -432,16 +493,17 @@ public:
     if (range_mm >= kSentinelInvalidRangeMm) {
       return RangeReadStatus::kSentinelRange;
     }
-    range_m = static_cast<double>(range_mm) / 1000.0;
     return RangeReadStatus::kOk;
   }
 
   std::string debugState() const override
   {
-    char buffer[96];
+    char buffer[144];
     std::snprintf(
-      buffer, sizeof(buffer), "vl53l0x_regs=sysrange_start=0x%02X interrupt_status=0x%02X range_status=0x%02X",
-      last_sysrange_start_, last_interrupt_status_, last_range_status_);
+      buffer, sizeof(buffer),
+      "vl53l0x_regs=sysrange_start=0x%02X interrupt_status=0x%02X range_status_raw=0x%02X range_status_decoded=%u raw_range_mm=%u",
+      last_sysrange_start_, last_interrupt_status_, last_range_status_,
+      static_cast<unsigned>((last_range_status_ >> 3) & 0x0F), static_cast<unsigned>(last_range_mm_));
     return buffer;
   }
 
@@ -748,6 +810,7 @@ private:
   uint8_t last_interrupt_status_;
   uint8_t last_range_status_;
   uint8_t last_sysrange_start_;
+  uint16_t last_range_mm_;
 };
 
 class VL53L1XDevice : public TofDevice
@@ -1114,6 +1177,7 @@ public:
       "publish_rate_hz", declare_parameter<double>("publish_rate", 20.0))),
     timeout_sec_(declare_parameter<double>("timeout_sec", 0.5)),
     read_timeout_ms_(declare_parameter<int>("read_timeout_ms", 500)),
+    accept_invalid_status_range_(declare_parameter<bool>("accept_invalid_status_range", false)),
     min_range_(declare_parameter<double>("min_range", 0.03)),
     max_range_(declare_parameter<double>("max_range", kDefaultMaxRange)),
     field_of_view_(declare_parameter<double>("field_of_view", 0.436))
@@ -1294,16 +1358,65 @@ private:
         continue;
       }
 
-      if (!has_read || (stamp - last_ok_time).seconds() > timeout_sec_) {
-        status = RangeReadStatus::kTimeout;
-        range = std::numeric_limits<double>::quiet_NaN();
+      const bool has_valid_sample = last_ok_time.nanoseconds() > 0;
+      if (!has_read) {
+        msg.range = std::numeric_limits<float>::quiet_NaN();
+        RCLCPP_WARN_THROTTLE(
+          get_logger(), *get_clock(), 5000,
+          "Invalid ToF reading from %s(0x%02X): no_read_yet",
+          config.name.c_str(), config.i2c_address);
+        runtime->publisher->publish(msg);
+        continue;
+      }
+
+      if (has_valid_sample && (stamp - last_ok_time).seconds() > timeout_sec_) {
+        msg.range = std::numeric_limits<float>::quiet_NaN();
+        RCLCPP_WARN_THROTTLE(
+          get_logger(), *get_clock(), 5000,
+          "Invalid ToF reading from %s(0x%02X): stale_timeout last_valid_age=%.3f sec last_status=%s",
+          config.name.c_str(), config.i2c_address, (stamp - last_ok_time).seconds(), statusToString(status));
+        runtime->publisher->publish(msg);
+        continue;
       }
 
       if (status != RangeReadStatus::kOk) {
+        if (std::isfinite(range) && range < min_range_) {
+          msg.range = -std::numeric_limits<float>::infinity();
+          RCLCPP_WARN_THROTTLE(
+            get_logger(), *get_clock(), 5000,
+            "Invalid ToF reading from %s(0x%02X): below_min status=%s range=%.3f m",
+            config.name.c_str(), config.i2c_address, statusToString(status), range);
+          runtime->publisher->publish(msg);
+          continue;
+        }
+
+        if (std::isfinite(range) && range > config.max_range_m) {
+          msg.range = std::numeric_limits<float>::infinity();
+          RCLCPP_WARN_THROTTLE(
+            get_logger(), *get_clock(), 5000,
+            "Invalid ToF reading from %s(0x%02X): above_max status=%s range=%.3f m",
+            config.name.c_str(), config.i2c_address, statusToString(status), range);
+          runtime->publisher->publish(msg);
+          continue;
+        }
+
+        if (accept_invalid_status_range_ && rangeStatusIsInvalid(status) &&
+          range >= min_range_ && range <= config.max_range_m)
+        {
+          RCLCPP_WARN_THROTTLE(
+            get_logger(), *get_clock(), 5000,
+            "Accepting ToF reading from %s(0x%02X) despite range_status_invalid: status=%s range=%.3f m",
+            config.name.c_str(), config.i2c_address, statusToString(status), range);
+          msg.range = static_cast<float>(range);
+          runtime->publisher->publish(msg);
+          continue;
+        }
+
         msg.range = invalidRangeForStatus(status);
+        const char * reason = invalidReasonForStatus(status);
         RCLCPP_WARN_THROTTLE(
-          get_logger(), *get_clock(), 5000, "Invalid ToF reading from %s(0x%02X): %s",
-          config.name.c_str(), config.i2c_address, statusToString(status));
+          get_logger(), *get_clock(), 5000, "Invalid ToF reading from %s(0x%02X): %s status=%s range=%.3f m",
+          config.name.c_str(), config.i2c_address, reason, statusToString(status), range);
         runtime->publisher->publish(msg);
         continue;
       }
@@ -1370,12 +1483,15 @@ private:
 
         {
           std::lock_guard<std::mutex> lock(runtime->mutex);
+          const bool accepted_invalid_status =
+            accept_invalid_status_range_ && rangeStatusIsInvalid(status) &&
+            range >= min_range_ && range <= runtime->config.max_range_m;
           runtime->has_read = true;
           runtime->status = status;
-          runtime->range_m = status == RangeReadStatus::kOk ? range : std::numeric_limits<double>::quiet_NaN();
+          runtime->range_m = std::isfinite(range) ? range : std::numeric_limits<double>::quiet_NaN();
           runtime->read_elapsed_ms = elapsed_ms;
           runtime->last_read_time = now;
-          if (status == RangeReadStatus::kOk) {
+          if (status == RangeReadStatus::kOk || accepted_invalid_status) {
             runtime->last_ok_time = now;
           }
         }
@@ -1544,6 +1660,7 @@ private:
   double publish_period_ms_;
   double timeout_sec_;
   int read_timeout_ms_;
+  bool accept_invalid_status_range_;
   double min_range_;
   double max_range_;
   double field_of_view_;
