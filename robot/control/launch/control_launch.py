@@ -10,7 +10,7 @@ def generate_launch_description():
         # ===== motor params =====
         DeclareLaunchArgument('port', default_value='/dev/ttyACM0'),
         DeclareLaunchArgument('baudrate', default_value='115200'),
-        DeclareLaunchArgument('wheel_separation', default_value='0.38'),
+        DeclareLaunchArgument('wheel_separation', default_value='0.35'),
         DeclareLaunchArgument('max_linear_vel', default_value='1.0'),
         DeclareLaunchArgument('watchdog_timeout', default_value='0.5'),
 
@@ -38,7 +38,7 @@ def generate_launch_description():
                 'odom_frame': 'odom',
                 'base_frame': 'base_footprint',
                 'wheel_radius': 0.0625,
-                'wheel_separation': 0.38,
+                'wheel_separation': 0.35,
                 'ticks_per_revolution': 75.0,
                 'publish_tf': False,
                 'left_tick_sign': 1.0,

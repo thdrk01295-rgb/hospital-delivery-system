@@ -24,7 +24,7 @@ EncoderOdomNode::EncoderOdomNode()
   odom_frame_ = declare_parameter<std::string>("odom_frame", "odom");
   base_frame_ = declare_parameter<std::string>("base_frame", "base_footprint");
   wheel_radius_ = declare_parameter<double>("wheel_radius", 0.0625);
-  wheel_separation_ = declare_parameter<double>("wheel_separation", 0.38);
+  wheel_separation_ = declare_parameter<double>("wheel_separation", 0.35);
   ticks_per_revolution_ = declare_parameter<double>("ticks_per_revolution", 75.0);
   publish_tf_ = declare_parameter<bool>("publish_tf", false);
   left_tick_sign_ = declare_parameter<double>("left_tick_sign", 1.0);

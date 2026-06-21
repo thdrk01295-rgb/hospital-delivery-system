@@ -123,7 +123,7 @@ MotorBridgeNode::MotorBridgeNode()
 {
   declare_parameter<std::string>("port", "/dev/ttyUSB0");
   declare_parameter<int>("baudrate", 115200);
-  declare_parameter<double>("wheel_separation", 0.38);
+  declare_parameter<double>("wheel_separation", 0.35);
   declare_parameter<double>("max_linear_vel", 1.0);
   declare_parameter<double>("watchdog_timeout", 0.5);
 

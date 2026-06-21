@@ -45,22 +45,22 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'front_left_yaw',
-            default_value='2.007128',
+            default_value='0.209440',
             description='Front-left ToF yaw relative to base_link in radians',
         ),
         DeclareLaunchArgument(
             'front_right_yaw',
-            default_value='-2.007128',
+            default_value='-0.209440',
             description='Front-right ToF yaw relative to base_link in radians',
         ),
         DeclareLaunchArgument(
             'rear_left_yaw',
-            default_value='2.70526',
+            default_value='2.932153',
             description='Rear-left ToF yaw relative to base_link in radians',
         ),
         DeclareLaunchArgument(
             'rear_right_yaw',
-            default_value='-2.70526',
+            default_value='-2.932153',
             description='Rear-right ToF yaw relative to base_link in radians',
         ),
         DeclareLaunchArgument(
@@ -75,9 +75,9 @@ def generate_launch_description():
             output='screen',
             parameters=[params_file],
         ),
-        static_tof_transform('tof_front_left_link', 0.22, 0.32, 0.15, front_left_yaw),
-        static_tof_transform('tof_front_right_link', 0.22, -0.32, 0.15, front_right_yaw),
-        static_tof_transform('tof_rear_left_link', -0.55, 0.28, 0.15, rear_left_yaw),
-        static_tof_transform('tof_rear_right_link', -0.55, -0.28, 0.15, rear_right_yaw),
+        static_tof_transform('tof_front_left_link', 0.22, 0.37, 0.15, front_left_yaw),
+        static_tof_transform('tof_front_right_link', 0.22, -0.23, 0.15, front_right_yaw),
+        static_tof_transform('tof_rear_left_link', -0.55, 0.32, 0.15, rear_left_yaw),
+        static_tof_transform('tof_rear_right_link', -0.55, -0.23, 0.15, rear_right_yaw),
         static_tof_transform('tof_rear_center_link', -0.55, 0.0, 0.15, rear_center_yaw),
     ])
