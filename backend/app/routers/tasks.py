@@ -258,7 +258,7 @@ async def patient_complete_task(
 
     # Signal robot to clear the matched patient task and publish IDLE
     from app.mqtt.client import publish
-    publish(mqtt_topics.SERVER_TASK_FINISH, {"robot_id": robot_code, "task_id": task_id, "source": "patient"})
+    publish(mqtt_topics.SERVER_TASK_FINISH, {"robot_id": robot_code, "task_id": task_id, "source": "patient_web"})
 
     return task
 

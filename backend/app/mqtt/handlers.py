@@ -460,7 +460,7 @@ def _handle_lock_status(raw: dict) -> None:
     """
     Handles robot/lock_status (v3).
     Broadcasts lock_status_update WebSocket event for the dashboard.
-    When status=LOCKED is received, cancels the pending WAIT_UNLOCK timeout for that task.
+    Cancels the WAIT_UNLOCK timeout only when command=UNLOCK and status=OPENED.
     """
     from app.websocket.manager import ws_manager
 
@@ -481,10 +481,12 @@ def _handle_lock_status(raw: dict) -> None:
         },
     ))
 
-    # Compartment locked after delivery → delivery complete, cancel pending timeout
-    if data.status == "LOCKED" and data.task_id is not None:
+    # Only command=UNLOCK + status=OPENED means the compartment was successfully unlocked.
+    # ACCEPTED = command acknowledged, LOCKED = locked/LOCK completed, FAILED = failure.
+    # None of those cancel the timeout — only a confirmed open does.
+    if data.command == "UNLOCK" and data.status == "OPENED" and data.task_id is not None:
         logger.info(
-            f"[lock_status] LOCKED received for task_id={data.task_id} "
+            f"[lock_status] UNLOCK+OPENED confirmed for task_id={data.task_id} "
             f"— cancelling WAIT_UNLOCK timeout"
         )
         _cancel_wait_unlock_timeout(data.task_id)

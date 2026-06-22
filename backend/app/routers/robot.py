@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Header, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from typing import Optional
@@ -6,8 +6,8 @@ from typing import Optional
 from app.db.session import get_db
 from app.schemas.robot import RobotStatusRead
 from app.services.robot_service import get_or_create_robot, get_robot_status_dict
-from app.services.auth_service import decode_token
 from app.constants import mqtt_topics
+from app.constants.enums import RobotState, TaskStatus
 
 router = APIRouter(prefix="/robot", tags=["robot"])
 
@@ -20,41 +20,83 @@ def robot_status(db: Session = Depends(get_db)):
 
 class LockCommandRequest(BaseModel):
     robot_id: str
-    task_id: int
-    command: str  # UNLOCK | LOCK
+    task_id: Optional[int] = None  # optional; validated against active task when provided
+    command: str                    # UNLOCK | LOCK
 
 
 @router.post("/lock-command", status_code=status.HTTP_200_OK)
 def send_lock_command(
     body: LockCommandRequest,
-    authorization: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
 ):
     """
-    Tablet UI endpoint (v3): sends server/lock_command to the robot.
-    Called when the nurse/patient presses the unlock button on the tablet.
-    Requires a valid nurse auth token.
+    Robot-mounted tablet endpoint (v3): sends server/lock_command to the robot.
+    No user auth required — the tablet acts in the context of the robot it is paired with.
+
+    Validations:
+      - command must be UNLOCK or LOCK
+      - robot_id must identify a known robot
+      - UNLOCK is rejected unless robot is in WAIT_UNLOCK state
+      - if task_id is provided it must match the robot's current active task
     """
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing token")
-    try:
-        token_payload = decode_token(authorization.split(" ", 1)[1])
-    except Exception:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
-
-    if token_payload.get("role") not in ("nurse", "patient"):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Nurses and patients only")
-
     if body.command not in ("UNLOCK", "LOCK"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Invalid command '{body.command}' — must be UNLOCK or LOCK",
         )
 
+    # Validate robot exists
+    from app.models.robot import Robot as RobotModel
+    robot = db.query(RobotModel).filter(RobotModel.robot_code == body.robot_id).first()
+    if not robot:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Robot '{body.robot_id}' not found",
+        )
+
+    # UNLOCK is only valid when the robot is waiting for compartment unlock
+    if body.command == "UNLOCK" and robot.current_state != RobotState.WAIT_UNLOCK:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"UNLOCK rejected — robot '{body.robot_id}' is in state "
+                f"'{robot.current_state}', expected WAIT_UNLOCK"
+            ),
+        )
+
+    # Resolve the robot's current active task
+    from app.models.task import Task
+    active_task = (
+        db.query(Task)
+        .filter(
+            Task.assigned_robot_id == robot.id,
+            Task.status.in_([TaskStatus.DISPATCHED, TaskStatus.IN_PROGRESS]),
+        )
+        .order_by(Task.created_at.desc())
+        .first()
+    )
+
+    # If caller supplied task_id, verify it matches the active task
+    if body.task_id is not None:
+        active_id = active_task.id if active_task else None
+        if active_id != body.task_id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"task_id={body.task_id} does not match robot's current active task "
+                    f"(active={active_id})"
+                ),
+            )
+
+    resolved_task_id = active_task.id if active_task else body.task_id
+    reason = "tablet_unlock" if body.command == "UNLOCK" else "tablet_lock"
+
     from app.mqtt.client import publish
-    payload = {
+    mqtt_payload = {
         "robot_id": body.robot_id,
-        "task_id": body.task_id,
+        "task_id": resolved_task_id,
         "command": body.command,
+        "reason": reason,
     }
-    publish(mqtt_topics.SERVER_LOCK_COMMAND, payload)
-    return {"status": "published", "payload": payload}
+    publish(mqtt_topics.SERVER_LOCK_COMMAND, mqtt_payload)
+    return {"status": "published", "payload": mqtt_payload}
