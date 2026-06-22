@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     # Low battery threshold (%)
     LOW_BATTERY_THRESHOLD: int = 20
 
+    # WAIT_UNLOCK timeout (seconds) — task marked FAILED if lock not received within this window
+    WAIT_UNLOCK_TIMEOUT_SECONDS: int = 60
+
     @property
     def DATABASE_URL(self) -> str:
         return (

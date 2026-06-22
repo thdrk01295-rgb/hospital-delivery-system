@@ -57,3 +57,13 @@ class MqttTaskCompletePayload(BaseModel):
     robot_id: str
     task_id: int
     timestamp: Optional[datetime] = None
+
+
+class MqttLockStatusPayload(BaseModel):
+    """robot/lock_status — v3: sent by robot after lock/unlock command is executed."""
+    robot_id: str
+    task_id: Optional[int] = None
+    command: str                   # UNLOCK | LOCK
+    status: str                    # ACCEPTED | OPENED | LOCKED | FAILED
+    message: Optional[str] = None
+    timestamp: Optional[datetime] = None

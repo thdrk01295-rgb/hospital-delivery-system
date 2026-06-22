@@ -8,3 +8,4 @@ ROBOT_BATTERY_UPDATE = "robot_battery_update"
 TASK_STATUS_UPDATE = "task_status_update"
 INVENTORY_UPDATE = "inventory_update"
 ABNORMAL_EVENT_UPDATE = "abnormal_event_update"
+LOCK_STATUS_UPDATE = "lock_status_update"   # v3: compartment lock/unlock events

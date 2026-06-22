@@ -34,10 +34,10 @@ def _get_token_payload(authorization: Optional[str]) -> dict:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
 
 
-def _publish_task_cancel(task_id: int, robot_code: str = "AMR-001") -> None:
+def _publish_task_cancel(task_id: int, robot_code: str = "AMR-001", reason: str = "user_cancel") -> None:
     """Publish server/task_cancel when the robot may already hold this task."""
     from app.mqtt.client import publish
-    publish(mqtt_topics.SERVER_TASK_CANCEL, {"robot_id": robot_code, "task_id": task_id})
+    publish(mqtt_topics.SERVER_TASK_CANCEL, {"robot_id": robot_code, "task_id": task_id, "reason": reason})
 
 
 # ── Nurse endpoints ──────────────────────────────────────────────────────────
@@ -258,7 +258,7 @@ async def patient_complete_task(
 
     # Signal robot to clear the matched patient task and publish IDLE
     from app.mqtt.client import publish
-    publish(mqtt_topics.SERVER_TASK_FINISH, {"robot_id": robot_code, "task_id": task_id})
+    publish(mqtt_topics.SERVER_TASK_FINISH, {"robot_id": robot_code, "task_id": task_id, "source": "patient"})
 
     return task
 

@@ -14,6 +14,7 @@ from app.schemas.robot import (
     MqttRobotBatteryPayload,
     MqttRobotErrorPayload,
     MqttTaskCompletePayload,
+    MqttLockStatusPayload,
 )
 from app.constants.enums import RobotState, TaskStatus
 
@@ -21,6 +22,9 @@ logger = logging.getLogger(__name__)
 
 # The running asyncio event loop — set from main.py at startup
 _loop: asyncio.AbstractEventLoop | None = None
+
+# Pending WAIT_UNLOCK timeout asyncio Tasks — keyed by task_id
+_wait_unlock_tasks: dict[int, asyncio.Task] = {}
 
 
 def set_event_loop(loop: asyncio.AbstractEventLoop) -> None:
@@ -45,6 +49,85 @@ def _schedule(coro):
         logger.warning("_schedule called before event loop was set — coroutine dropped")
 
 
+# ── WAIT_UNLOCK timeout machinery ─────────────────────────────────────────────
+
+def _start_wait_unlock_timeout(task_id: int, robot_code: str) -> None:
+    """Thread-safe: schedule a WAIT_UNLOCK timeout asyncio.Task from the MQTT thread."""
+    if _loop is None:
+        logger.warning("_start_wait_unlock_timeout called before event loop was set")
+        return
+    _loop.call_soon_threadsafe(_create_wait_unlock_task, task_id, robot_code)
+
+
+def _create_wait_unlock_task(task_id: int, robot_code: str) -> None:
+    """Runs in the event loop thread. Creates the asyncio.Task for WAIT_UNLOCK timeout."""
+    if task_id in _wait_unlock_tasks:
+        logger.debug(f"[WAIT_UNLOCK] Timeout already running for task_id={task_id} — skipping duplicate")
+        return
+    t = _loop.create_task(_run_wait_unlock_timeout(task_id, robot_code))
+    _wait_unlock_tasks[task_id] = t
+    logger.info(f"[WAIT_UNLOCK] Timeout task started for task_id={task_id}")
+
+
+async def _run_wait_unlock_timeout(task_id: int, robot_code: str) -> None:
+    """Async coroutine — fails the task if the lock is not received within the timeout."""
+    from app.config.settings import settings
+    from app.db.session import SessionLocal
+    from app.services.task_service import update_task_status
+    from app.schemas.task import TaskRead
+    from app.websocket.manager import ws_manager
+
+    timeout = settings.WAIT_UNLOCK_TIMEOUT_SECONDS
+    try:
+        await asyncio.sleep(timeout)
+    except asyncio.CancelledError:
+        logger.info(f"[WAIT_UNLOCK] Timeout cancelled for task_id={task_id} — lock received in time")
+        return
+
+    _wait_unlock_tasks.pop(task_id, None)
+    logger.warning(
+        f"[WAIT_UNLOCK] Timeout expired ({timeout}s) for task_id={task_id}, "
+        f"robot={robot_code} — marking task FAILED"
+    )
+
+    db = SessionLocal()
+    try:
+        task = update_task_status(db, task_id, TaskStatus.FAILED)
+        if task:
+            task_dict = TaskRead.model_validate(task).model_dump(mode="json")
+            await ws_manager.broadcast(ws_events.TASK_STATUS_UPDATE, task_dict)
+    finally:
+        db.close()
+
+    from app.mqtt.client import publish
+    publish(mqtt_topics.SERVER_TASK_CANCEL, {
+        "robot_id": robot_code,
+        "task_id": task_id,
+        "reason": "wait_unlock_timeout",
+    })
+    logger.info(
+        f"[WAIT_UNLOCK] Published server/task_cancel: robot={robot_code}, "
+        f"task_id={task_id}, reason=wait_unlock_timeout"
+    )
+
+
+def _cancel_wait_unlock_timeout(task_id: int) -> None:
+    """Thread-safe: cancel a pending WAIT_UNLOCK timeout (call from any thread)."""
+    if _loop is None:
+        return
+    _loop.call_soon_threadsafe(_do_cancel_wait_unlock, task_id)
+
+
+def _do_cancel_wait_unlock(task_id: int) -> None:
+    """Runs in the event loop. Cancels the asyncio.Task for this task_id."""
+    t = _wait_unlock_tasks.pop(task_id, None)
+    if t and not t.done():
+        t.cancel()
+        logger.info(f"[WAIT_UNLOCK] Timeout asyncio.Task cancelled for task_id={task_id}")
+    else:
+        logger.debug(f"[WAIT_UNLOCK] No active timeout found for task_id={task_id}")
+
+
 def dispatch_message(topic: str, payload: dict) -> None:
     handlers = {
         mqtt_topics.ROBOT_STATUS:        _handle_robot_status,
@@ -52,6 +135,7 @@ def dispatch_message(topic: str, payload: dict) -> None:
         mqtt_topics.ROBOT_BATTERY:       _handle_robot_battery,
         mqtt_topics.ROBOT_ERROR:         _handle_robot_error,
         mqtt_topics.ROBOT_TASK_COMPLETE: _handle_task_complete,
+        mqtt_topics.ROBOT_LOCK_STATUS:   _handle_lock_status,
     }
     handler = handlers.get(topic)
     if handler:
@@ -102,6 +186,15 @@ def _handle_robot_status(raw: dict) -> None:
         robot = update_robot_state(db, data.robot_id, data.state)
         status_dict = get_robot_status_dict(robot)
         _schedule(ws_manager.broadcast(ws_events.ROBOT_STATE_UPDATE, status_dict))
+
+        # WAIT_UNLOCK: start server-side timeout when robot awaits compartment unlock
+        if data.state == RobotState.WAIT_UNLOCK and data.task_id is not None:
+            from app.config.settings import settings
+            logger.info(
+                f"[WAIT_UNLOCK] robot={data.robot_id} task_id={data.task_id} "
+                f"— starting {settings.WAIT_UNLOCK_TIMEOUT_SECONDS}s timeout"
+            )
+            _start_wait_unlock_timeout(data.task_id, data.robot_id)
 
         # NOTE: LOW_BATTERY state is no longer triggered here.
         # Low-battery handling (event + task requeue + station-return dispatch)
@@ -235,7 +328,7 @@ def _handle_low_battery(db, robot) -> None:
             f"[LOW BATTERY] Active task found: task_id={active_task.id} "
             f"status={active_task.status} type={active_task.task_type} — publishing server/task_cancel"
         )
-        cancel_payload = {"robot_id": robot.robot_code, "task_id": active_task.id}
+        cancel_payload = {"robot_id": robot.robot_code, "task_id": active_task.id, "reason": "low_battery"}
         publish(mqtt_topics.SERVER_TASK_CANCEL, cancel_payload)
         logger.info(f"[LOW BATTERY] Published server/task_cancel: {cancel_payload}")
 
@@ -361,6 +454,40 @@ def _handle_robot_error(raw: dict) -> None:
         ))
     finally:
         db.close()
+
+
+def _handle_lock_status(raw: dict) -> None:
+    """
+    Handles robot/lock_status (v3).
+    Broadcasts lock_status_update WebSocket event for the dashboard.
+    When status=LOCKED is received, cancels the pending WAIT_UNLOCK timeout for that task.
+    """
+    from app.websocket.manager import ws_manager
+
+    data = MqttLockStatusPayload(**raw)
+    logger.info(
+        f"[lock_status] robot={data.robot_id} task_id={data.task_id} "
+        f"command={data.command} status={data.status}"
+    )
+
+    _schedule(ws_manager.broadcast(
+        ws_events.LOCK_STATUS_UPDATE,
+        {
+            "robot_id": data.robot_id,
+            "task_id": data.task_id,
+            "command": data.command,
+            "status": data.status,
+            "message": data.message,
+        },
+    ))
+
+    # Compartment locked after delivery → delivery complete, cancel pending timeout
+    if data.status == "LOCKED" and data.task_id is not None:
+        logger.info(
+            f"[lock_status] LOCKED received for task_id={data.task_id} "
+            f"— cancelling WAIT_UNLOCK timeout"
+        )
+        _cancel_wait_unlock_timeout(data.task_id)
 
 
 def _handle_task_complete(raw: dict) -> None:

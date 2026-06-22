@@ -10,9 +10,7 @@ class RobotState(str, Enum):
     IDLE = "IDLE"
     MOVING = "MOVING"
     ARRIVED = "ARRIVED"
-    WAIT_NFC = "WAIT_NFC"
-    AUTH_SUCCESS = "AUTH_SUCCESS"
-    AUTH_FAIL = "AUTH_FAIL"
+    WAIT_UNLOCK = "WAIT_UNLOCK"           # v3: replaces WAIT_NFC/AUTH_SUCCESS/AUTH_FAIL
     DELIVERY_OPEN_NUR = "DELIVERY_OPEN_NUR"
     DELIVERY_OPEN_PAT = "DELIVERY_OPEN_PAT"
     COMPLETE = "COMPLETE"
@@ -83,12 +81,11 @@ BLOCKING_ROBOT_STATES: set[str] = {
     RobotState.LOW_BATTERY,
     RobotState.CHARGING_BATTERY,
     RobotState.MOVING,
-    RobotState.WAIT_NFC,
-    RobotState.AUTH_SUCCESS,
-    RobotState.AUTH_FAIL,
+    RobotState.WAIT_UNLOCK,
     RobotState.DELIVERY_OPEN_NUR,
     RobotState.DELIVERY_OPEN_PAT,
     RobotState.ARRIVED,
+    RobotState.COMPLETE,
 }
 
 # Robot states considered "abnormal" (device error category)

@@ -38,6 +38,7 @@ def _on_connect(client: mqtt.Client, userdata, flags, rc):
         client.subscribe(mqtt_topics.ROBOT_BATTERY)
         client.subscribe(mqtt_topics.ROBOT_ERROR)
         client.subscribe(mqtt_topics.ROBOT_TASK_COMPLETE)
+        client.subscribe(mqtt_topics.ROBOT_LOCK_STATUS)
     else:
         logger.error(f"MQTT connection failed, rc={rc}")
 
