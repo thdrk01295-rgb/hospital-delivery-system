@@ -31,6 +31,7 @@ private:
   void onBatteryState(const std_msgs::msg::Float32::SharedPtr msg);
   void onErrorEvent(const std_msgs::msg::String::SharedPtr msg);
   void onTaskCompleteEvent(const std_msgs::msg::String::SharedPtr msg);
+  void onLockStatus(const std_msgs::msg::String::SharedPtr msg);
   bool publishMqtt(const std::string & topic, const nlohmann::json & payload);
 
   std::string robot_id_;
@@ -46,11 +47,13 @@ private:
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_task_cancel_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_task_finish_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_emergency_call_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_lock_command_;
 
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr  sub_task_state_;
   rclcpp::Subscription<std_msgs::msg::Float32>::SharedPtr sub_battery_state_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr  sub_error_event_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr  sub_task_complete_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr  sub_lock_status_;
 };
 
 }  // namespace server_bridge

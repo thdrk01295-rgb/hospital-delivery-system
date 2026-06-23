@@ -36,6 +36,7 @@ enum class TaskState
   LOADING,
   MOVING_TO_DESTINATION,
   AT_DESTINATION,
+  WAIT_UNLOCK,
   UNLOADING,
   TASK_COMPLETE,
   ERROR,
@@ -63,6 +64,8 @@ private:
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr sub_task_assign_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr sub_task_cancel_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr sub_task_finish_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr sub_lock_command_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr sub_lock_status_feedback_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr sub_emergency_call_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr sub_nav_result_;
 
@@ -76,6 +79,7 @@ private:
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_location_code_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_task_complete_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_error_event_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_lock_status_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr pub_cmd_vel_;
 
   // ── Timers ──────────────────────────────────────────────
@@ -90,8 +94,10 @@ private:
   std::recursive_mutex       state_mutex_;
   double                    navigation_timeout_sec_{300.0};
   std::string               robot_id_{"AMR-001"};
+  bool                      lock_mock_enabled_{true};
   std::optional<int>         navigation_task_id_;
   std::string               navigation_phase_;
+  std::string               unlock_phase_;
   bool                      navigation_in_progress_{false};
   bool                      waiting_patient_finish_{false};
 
@@ -99,6 +105,8 @@ private:
   void on_task_assign(const std_msgs::msg::String::SharedPtr msg);
   void on_task_cancel(const std_msgs::msg::String::SharedPtr msg);
   void on_task_finish(const std_msgs::msg::String::SharedPtr msg);
+  void on_lock_command(const std_msgs::msg::String::SharedPtr msg);
+  void on_lock_status_feedback(const std_msgs::msg::String::SharedPtr msg);
   void on_emergency_call(const std_msgs::msg::String::SharedPtr msg);
   void on_nav_result (const std_msgs::msg::String::SharedPtr msg);
 
@@ -120,9 +128,14 @@ private:
   void publish_task_state();
   void publish_location_code(const std::string & code);
   void publish_task_complete();
+  void publish_lock_status(
+    const std::string & command,
+    const std::string & status,
+    const std::optional<std::string> & message = std::nullopt);
   void publish_error(const std::string & message);
   void enter_error(const std::string & message);
   void enter_emergency();
+  void handle_lock_opened();
   void clear_task_context();
   void clear_navigation_context();
   void reset_to_idle();

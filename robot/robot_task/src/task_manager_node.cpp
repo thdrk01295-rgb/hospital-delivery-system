@@ -19,6 +19,7 @@ TaskManagerNode::TaskManagerNode(const rclcpp::NodeOptions & options)
 {
   robot_id_ = declare_parameter<std::string>("robot_id", "AMR-001");
   navigation_timeout_sec_ = declare_parameter<double>("navigation_timeout_sec", 300.0);
+  lock_mock_enabled_ = declare_parameter<bool>("lock_mock_enabled", true);
   if (navigation_timeout_sec_ <= 0.0) {
     RCLCPP_WARN(get_logger(),
       "navigation_timeout_sec must be positive; using default 300.0 sec");
@@ -51,6 +52,14 @@ TaskManagerNode::TaskManagerNode(const rclcpp::NodeOptions & options)
     "/server/task_finish", 10,
     std::bind(&TaskManagerNode::on_task_finish, this, _1));
 
+  sub_lock_command_ = create_subscription<std_msgs::msg::String>(
+    "/server/lock_command", 10,
+    std::bind(&TaskManagerNode::on_lock_command, this, _1));
+
+  sub_lock_status_feedback_ = create_subscription<std_msgs::msg::String>(
+    "/robot/lock_status", 10,
+    std::bind(&TaskManagerNode::on_lock_status_feedback, this, _1));
+
   sub_emergency_call_ = create_subscription<std_msgs::msg::String>(
     "/server/emergency_call", 10,
     std::bind(&TaskManagerNode::on_emergency_call, this, _1));
@@ -76,6 +85,7 @@ TaskManagerNode::TaskManagerNode(const rclcpp::NodeOptions & options)
   pub_location_code_ = create_publisher<std_msgs::msg::String>("/robot/location_code",       10);
   pub_task_complete_ = create_publisher<std_msgs::msg::String>("/robot/task_complete_event", 10);
   pub_error_event_   = create_publisher<std_msgs::msg::String>("/robot/error_event",         10);
+  pub_lock_status_   = create_publisher<std_msgs::msg::String>("/robot/lock_status",         10);
   pub_cmd_vel_        = create_publisher<geometry_msgs::msg::Twist>("/cmd_vel",              10);
 
   // Initial state broadcast so mqtt_bridge knows we're IDLE on startup
@@ -83,6 +93,8 @@ TaskManagerNode::TaskManagerNode(const rclcpp::NodeOptions & options)
   RCLCPP_INFO(get_logger(), "TaskManagerNode ready — state: IDLE");
   RCLCPP_INFO(get_logger(),
     "Navigation timeout: %.1fs", navigation_timeout_sec_);
+  RCLCPP_INFO(get_logger(),
+    "Lock mock mode: %s", lock_mock_enabled_ ? "enabled" : "disabled");
 }
 
 // ============================================================
@@ -190,6 +202,7 @@ void TaskManagerNode::on_task_cancel(const std_msgs::msg::String::SharedPtr msg)
   std::lock_guard<std::recursive_mutex> lock(state_mutex_);
 
   int cancel_task_id;
+  std::string cancel_reason;
   try {
     json j = json::parse(msg->data);
     if (j.contains("robot_id") && !j["robot_id"].is_null()) {
@@ -210,6 +223,13 @@ void TaskManagerNode::on_task_cancel(const std_msgs::msg::String::SharedPtr msg)
       return;
     }
     cancel_task_id = j["task_id"].get<int>();
+    if (j.contains("reason") && !j["reason"].is_null()) {
+      if (!j["reason"].is_string()) {
+        RCLCPP_WARN(get_logger(), "task_cancel reason must be a string — ignored");
+      } else {
+        cancel_reason = j["reason"].get<std::string>();
+      }
+    }
   } catch (const json::exception & e) {
     RCLCPP_ERROR(get_logger(), "task_cancel JSON parse error: %s", e.what());
     return;
@@ -239,7 +259,9 @@ void TaskManagerNode::on_task_cancel(const std_msgs::msg::String::SharedPtr msg)
   }
 
   RCLCPP_WARN(get_logger(),
-    "Task CANCELLED — task_id=%d resetting to IDLE", active_task_->task_id);
+    "Task CANCELLED — task_id=%d reason=%s resetting to IDLE",
+    active_task_->task_id,
+    cancel_reason.empty() ? "unspecified" : cancel_reason.c_str());
 
   // Cancel any running timers
   if (loading_timer_)   { loading_timer_->cancel();   loading_timer_.reset(); }
@@ -293,18 +315,158 @@ void TaskManagerNode::on_task_finish(const std_msgs::msg::String::SharedPtr msg)
     return;
   }
 
-  if (!is_patient_task()) {
-    RCLCPP_WARN(get_logger(),
-      "task_finish received for non-patient task_type=%s — ignored",
-      active_task_->task_type.c_str());
+  RCLCPP_INFO(get_logger(),
+    "task_finish accepted — task_id=%d type=%s resetting to IDLE",
+    active_task_->task_id, active_task_->task_type.c_str());
+  waiting_patient_finish_ = false;
+  reset_to_idle();
+}
+
+// ────────────────────────────────────────────────────────────
+void TaskManagerNode::on_lock_command(const std_msgs::msg::String::SharedPtr msg)
+{
+  std::lock_guard<std::recursive_mutex> lock(state_mutex_);
+
+  std::string command;
+  std::optional<int> command_task_id;
+  try {
+    json j = json::parse(msg->data);
+    if (!j.contains("robot_id") || !j["robot_id"].is_string()) {
+      RCLCPP_ERROR(get_logger(), "lock_command robot_id must be a string");
+      return;
+    }
+    const auto incoming_robot_id = j["robot_id"].get<std::string>();
+    if (incoming_robot_id != robot_id_) {
+      RCLCPP_WARN(get_logger(),
+        "lock_command robot_id mismatch — got %s expected %s; ignored",
+        incoming_robot_id.c_str(), robot_id_.c_str());
+      return;
+    }
+
+    if (!j.contains("command") || !j["command"].is_string()) {
+      RCLCPP_ERROR(get_logger(), "lock_command command must be a string");
+      return;
+    }
+    command = j["command"].get<std::string>();
+    if (command != "UNLOCK" && command != "LOCK") {
+      RCLCPP_ERROR(get_logger(), "lock_command command must be UNLOCK or LOCK");
+      return;
+    }
+
+    if (j.contains("task_id") && !j["task_id"].is_null()) {
+      if (!j["task_id"].is_number_integer()) {
+        RCLCPP_ERROR(get_logger(), "lock_command task_id must be an integer");
+        return;
+      }
+      command_task_id = j["task_id"].get<int>();
+    }
+  } catch (const json::exception & e) {
+    RCLCPP_ERROR(get_logger(), "lock_command JSON parse error: %s", e.what());
     return;
   }
 
-  RCLCPP_INFO(get_logger(),
-    "Patient task_finish accepted — task_id=%d resetting to IDLE",
-    active_task_->task_id);
-  waiting_patient_finish_ = false;
-  reset_to_idle();
+  if (command_task_id) {
+    if (!active_task_) {
+      RCLCPP_WARN(get_logger(),
+        "lock_command task_id=%d received without active task — ignored",
+        *command_task_id);
+      return;
+    }
+    if (*command_task_id != active_task_->task_id) {
+      RCLCPP_WARN(get_logger(),
+        "lock_command task_id mismatch — got %d active %d; ignored",
+        *command_task_id, active_task_->task_id);
+      return;
+    }
+  }
+
+  if (command == "UNLOCK") {
+    if (!active_task_) {
+      RCLCPP_WARN(get_logger(), "UNLOCK received without active task — rejected");
+      publish_lock_status(command, "FAILED", "no active task");
+      return;
+    }
+    if (state_ != TaskState::WAIT_UNLOCK) {
+      RCLCPP_WARN(get_logger(), "UNLOCK received while state is %s — rejected",
+        state_to_string(state_).c_str());
+      publish_lock_status(command, "FAILED", "robot is not waiting for unlock");
+      return;
+    }
+  }
+
+  publish_lock_status(command, "ACCEPTED");
+  if (!lock_mock_enabled_) {
+    RCLCPP_INFO(get_logger(),
+      "lock_mock_enabled=false; waiting for external lock/control result for %s",
+      command.c_str());
+    return;
+  }
+
+  if (command == "UNLOCK") {
+    publish_lock_status(command, "OPENED");
+    handle_lock_opened();
+  } else {
+    publish_lock_status(command, "LOCKED");
+  }
+}
+
+// ────────────────────────────────────────────────────────────
+void TaskManagerNode::on_lock_status_feedback(const std_msgs::msg::String::SharedPtr msg)
+{
+  std::lock_guard<std::recursive_mutex> lock(state_mutex_);
+
+  std::string command;
+  std::string status;
+  std::optional<int> status_task_id;
+  try {
+    json j = json::parse(msg->data);
+    if (j.contains("robot_id") && !j["robot_id"].is_null()) {
+      if (!j["robot_id"].is_string()) {
+        RCLCPP_WARN(get_logger(), "lock_status robot_id must be a string — ignored");
+        return;
+      }
+      const auto incoming_robot_id = j["robot_id"].get<std::string>();
+      if (incoming_robot_id != robot_id_) {
+        RCLCPP_WARN(get_logger(),
+          "lock_status robot_id mismatch — got %s expected %s; ignored",
+          incoming_robot_id.c_str(), robot_id_.c_str());
+        return;
+      }
+    }
+
+    if (!j.contains("command") || !j["command"].is_string() ||
+      !j.contains("status") || !j["status"].is_string())
+    {
+      RCLCPP_WARN(get_logger(), "lock_status feedback requires string command and status");
+      return;
+    }
+    command = j["command"].get<std::string>();
+    status = j["status"].get<std::string>();
+    if (j.contains("task_id") && !j["task_id"].is_null()) {
+      if (!j["task_id"].is_number_integer()) {
+        RCLCPP_WARN(get_logger(), "lock_status task_id must be an integer — ignored");
+        return;
+      }
+      status_task_id = j["task_id"].get<int>();
+    }
+  } catch (const json::exception & e) {
+    RCLCPP_WARN(get_logger(), "lock_status feedback JSON parse error: %s", e.what());
+    return;
+  }
+
+  if (status_task_id && (!active_task_ || *status_task_id != active_task_->task_id)) {
+    RCLCPP_WARN(get_logger(),
+      "lock_status task_id mismatch — got %d active %s; ignored",
+      *status_task_id,
+      active_task_ ? std::to_string(active_task_->task_id).c_str() : "none");
+    return;
+  }
+
+  if (command == "UNLOCK" && status == "OPENED") {
+    handle_lock_opened();
+  } else if (status == "FAILED") {
+    RCLCPP_WARN(get_logger(), "Lock command failed: command=%s", command.c_str());
+  }
 }
 
 // ────────────────────────────────────────────────────────────
@@ -598,21 +760,24 @@ void TaskManagerNode::transition_to(TaskState next)
 
     case TaskState::AT_ORIGIN:
       publish_location_code(active_task_->origin);
+      unlock_phase_ = "ORIGIN";
+      transition_to(TaskState::WAIT_UNLOCK);
+      break;
+
+    case TaskState::WAIT_UNLOCK:
+      // The server-side WAIT_UNLOCK timeout starts from this public state.
+      break;
+
+    case TaskState::LOADING:
 #ifndef USE_NFC_TRIGGER
       RCLCPP_INFO(get_logger(),
-        "AT_ORIGIN — starting loading timer (%.1fs)", LOADING_TIMER_SEC);
+        "DELIVERY_OPEN_NUR — starting loading timer (%.1fs)", LOADING_TIMER_SEC);
       loading_timer_ = create_wall_timer(
         std::chrono::duration<double>(LOADING_TIMER_SEC),
         std::bind(&TaskManagerNode::on_loading_timer, this));
 #else
-      RCLCPP_INFO(get_logger(), "AT_ORIGIN — waiting for NFC trigger");
+      RCLCPP_INFO(get_logger(), "DELIVERY_OPEN_NUR — waiting for NFC trigger");
 #endif
-      transition_to(TaskState::LOADING);
-      break;
-
-    case TaskState::LOADING:
-      // Timer already started in AT_ORIGIN. Nothing more to do here.
-      // (or waiting for NFC trigger if USE_NFC_TRIGGER defined)
       break;
 
     case TaskState::MOVING_TO_DESTINATION:
@@ -630,14 +795,19 @@ void TaskManagerNode::transition_to(TaskState next)
         transition_to(TaskState::TASK_COMPLETE);
         break;
       }
+      unlock_phase_ = "DESTINATION";
+      transition_to(TaskState::WAIT_UNLOCK);
+      break;
+
+    case TaskState::UNLOADING:
 #ifndef USE_NFC_TRIGGER
       if (is_patient_task()) {
         waiting_patient_finish_ = true;
         RCLCPP_INFO(get_logger(),
-          "AT_DESTINATION — patient task waits for server task_finish after unload opens");
+          "DELIVERY_OPEN_PAT — patient task waits for server task_finish");
       } else {
         RCLCPP_INFO(get_logger(),
-          "AT_DESTINATION — starting unloading timer (%.1fs)", UNLOADING_TIMER_SEC);
+          "DELIVERY_OPEN_NUR — starting unloading timer (%.1fs)", UNLOADING_TIMER_SEC);
         unloading_timer_ = create_wall_timer(
           std::chrono::duration<double>(UNLOADING_TIMER_SEC),
           std::bind(&TaskManagerNode::on_unloading_timer, this));
@@ -646,16 +816,11 @@ void TaskManagerNode::transition_to(TaskState next)
       if (is_patient_task()) {
         waiting_patient_finish_ = true;
         RCLCPP_INFO(get_logger(),
-          "AT_DESTINATION — patient task waits for server task_finish after unload opens");
+          "DELIVERY_OPEN_PAT — patient task waits for server task_finish");
       } else {
-        RCLCPP_INFO(get_logger(), "AT_DESTINATION — waiting for NFC trigger");
+        RCLCPP_INFO(get_logger(), "DELIVERY_OPEN_NUR — waiting for NFC trigger");
       }
 #endif
-      transition_to(TaskState::UNLOADING);
-      break;
-
-    case TaskState::UNLOADING:
-      // Timer already started in AT_DESTINATION. Nothing more to do here.
       break;
 
     case TaskState::TASK_COMPLETE:
@@ -816,6 +981,29 @@ void TaskManagerNode::publish_task_complete()
     "Published task_complete_event: task_id=%d", active_task_->task_id);
 }
 
+void TaskManagerNode::publish_lock_status(
+  const std::string & command,
+  const std::string & status,
+  const std::optional<std::string> & message)
+{
+  json j;
+  j["robot_id"] = robot_id_;
+  if (active_task_) {
+    j["task_id"] = active_task_->task_id;
+  }
+  j["command"] = command;
+  j["status"] = status;
+  if (message) {
+    j["message"] = *message;
+  }
+
+  auto msg = std_msgs::msg::String{};
+  msg.data = j.dump();
+  pub_lock_status_->publish(msg);
+  RCLCPP_INFO(get_logger(), "Published lock_status: command=%s status=%s",
+    command.c_str(), status.c_str());
+}
+
 void TaskManagerNode::publish_error(const std::string & message)
 {
   json j;
@@ -862,6 +1050,30 @@ void TaskManagerNode::enter_emergency()
   RCLCPP_ERROR(get_logger(), "Emergency STOP applied");
 }
 
+void TaskManagerNode::handle_lock_opened()
+{
+  if (!active_task_) {
+    RCLCPP_WARN(get_logger(), "lock OPENED received without active task — ignored");
+    return;
+  }
+  if (state_ != TaskState::WAIT_UNLOCK) {
+    RCLCPP_DEBUG(get_logger(), "lock OPENED received while state is %s — ignored",
+      state_to_string(state_).c_str());
+    return;
+  }
+
+  if (unlock_phase_ == "ORIGIN") {
+    transition_to(TaskState::LOADING);
+    return;
+  }
+  if (unlock_phase_ == "DESTINATION") {
+    transition_to(TaskState::UNLOADING);
+    return;
+  }
+
+  RCLCPP_WARN(get_logger(), "lock OPENED received with unknown unlock phase — ignored");
+}
+
 void TaskManagerNode::clear_task_context()
 {
   if (loading_timer_) {
@@ -874,6 +1086,7 @@ void TaskManagerNode::clear_task_context()
   }
   stop_navigation_timeout();
   clear_navigation_context();
+  unlock_phase_.clear();
   waiting_patient_finish_ = false;
   active_task_.reset();
 }
@@ -923,6 +1136,7 @@ std::string TaskManagerNode::state_to_string(TaskState s)
     case TaskState::LOADING:                return "LOADING";
     case TaskState::MOVING_TO_DESTINATION:  return "MOVING_TO_DESTINATION";
     case TaskState::AT_DESTINATION:         return "AT_DESTINATION";
+    case TaskState::WAIT_UNLOCK:            return "WAIT_UNLOCK";
     case TaskState::UNLOADING:              return "UNLOADING";
     case TaskState::TASK_COMPLETE:          return "TASK_COMPLETE";
     case TaskState::ERROR:                  return "ERROR";
@@ -943,8 +1157,10 @@ std::string TaskManagerNode::state_to_robot_state(TaskState s) const
     case TaskState::AT_ORIGIN:
     case TaskState::AT_DESTINATION:
       return "ARRIVED";
+    case TaskState::WAIT_UNLOCK:
+      return "WAIT_UNLOCK";
     case TaskState::LOADING:
-      return "WAIT_NFC";
+      return "DELIVERY_OPEN_NUR";
     case TaskState::UNLOADING:
       return is_patient_task() ? "DELIVERY_OPEN_PAT" : "DELIVERY_OPEN_NUR";
     case TaskState::TASK_COMPLETE:

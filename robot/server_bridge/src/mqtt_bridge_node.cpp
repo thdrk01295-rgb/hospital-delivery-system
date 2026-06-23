@@ -13,11 +13,13 @@ namespace topic
 constexpr char TASK_ASSIGN[]    = "server/task_assign";
 constexpr char TASK_CANCEL[]    = "server/task_cancel";
 constexpr char TASK_FINISH[]    = "server/task_finish";
+constexpr char LOCK_COMMAND[]   = "server/lock_command";
 constexpr char EMERGENCY_CALL[] = "server/emergency_call";
 constexpr char STATUS[]         = "robot/status";
 constexpr char BATTERY[]        = "robot/battery";
 constexpr char ERROR[]          = "robot/error";
 constexpr char TASK_COMPLETE[]  = "robot/task_complete";
+constexpr char LOCK_STATUS[]    = "robot/lock_status";
 }  // namespace topic
 
 namespace
@@ -226,6 +228,7 @@ void MqttBridgeNode::initMqtt()
   mqtt_client_->subscribe(topic::TASK_ASSIGN);
   mqtt_client_->subscribe(topic::TASK_CANCEL);
   mqtt_client_->subscribe(topic::TASK_FINISH);
+  mqtt_client_->subscribe(topic::LOCK_COMMAND);
   mqtt_client_->subscribe(topic::EMERGENCY_CALL);
 
   if (!mqtt_client_->connect(10)) {
@@ -241,6 +244,7 @@ void MqttBridgeNode::initRos()
   pub_task_cancel_    = create_publisher<std_msgs::msg::String>("/server/task_cancel",    qos);
   pub_task_finish_    = create_publisher<std_msgs::msg::String>("/server/task_finish",    qos);
   pub_emergency_call_ = create_publisher<std_msgs::msg::String>("/server/emergency_call", qos);
+  pub_lock_command_   = create_publisher<std_msgs::msg::String>("/server/lock_command",   qos);
 
   sub_task_state_ = create_subscription<std_msgs::msg::String>(
     "/robot/task_state", qos,
@@ -257,6 +261,10 @@ void MqttBridgeNode::initRos()
   sub_task_complete_ = create_subscription<std_msgs::msg::String>(
     "/robot/task_complete_event", qos,
     [this](const std_msgs::msg::String::SharedPtr m) {onTaskCompleteEvent(m);});
+
+  sub_lock_status_ = create_subscription<std_msgs::msg::String>(
+    "/robot/lock_status", qos,
+    [this](const std_msgs::msg::String::SharedPtr m) {onLockStatus(m);});
 }
 
 void MqttBridgeNode::onMqttMessage(const std::string & t, const std::string & payload)
@@ -283,6 +291,21 @@ void MqttBridgeNode::onMqttMessage(const std::string & t, const std::string & pa
     if (!requireIntegerField(get_logger(), t, parsed, "task_id")) {
       return;
     }
+  } else if (t == topic::LOCK_COMMAND) {
+    if (!requireStringField(get_logger(), t, parsed, "command")) {
+      return;
+    }
+    if (parsed.contains("task_id") && !parsed["task_id"].is_null() &&
+      !isInteger(parsed["task_id"]))
+    {
+      RCLCPP_ERROR(get_logger(), "%s payload task_id must be an integer", t.c_str());
+      return;
+    }
+    const auto command = parsed["command"].get<std::string>();
+    if (command != "UNLOCK" && command != "LOCK") {
+      RCLCPP_ERROR(get_logger(), "%s payload command must be UNLOCK or LOCK", t.c_str());
+      return;
+    }
   } else if (t == topic::EMERGENCY_CALL) {
     if (!requireStringField(get_logger(), t, parsed, "command")) {
       return;
@@ -303,6 +326,8 @@ void MqttBridgeNode::onMqttMessage(const std::string & t, const std::string & pa
     pub_task_cancel_->publish(msg);
   } else if (t == topic::TASK_FINISH) {
     pub_task_finish_->publish(msg);
+  } else if (t == topic::LOCK_COMMAND) {
+    pub_lock_command_->publish(msg);
   } else if (t == topic::EMERGENCY_CALL) {
     pub_emergency_call_->publish(msg);
     RCLCPP_WARN(get_logger(), "Emergency call received");
@@ -416,6 +441,64 @@ void MqttBridgeNode::onTaskCompleteEvent(const std_msgs::msg::String::SharedPtr 
     out["timestamp"] = in["timestamp"];
   }
   publishMqtt(topic::TASK_COMPLETE, out);
+}
+
+void MqttBridgeNode::onLockStatus(const std_msgs::msg::String::SharedPtr msg)
+{
+  json in;
+  if (!parseJsonObject(get_logger(), "/robot/lock_status", msg->data, in)) {
+    return;
+  }
+  if (!requireStringField(get_logger(), "/robot/lock_status", in, "command") ||
+    !requireStringField(get_logger(), "/robot/lock_status", in, "status"))
+  {
+    return;
+  }
+
+  if (in.contains("robot_id") && !in["robot_id"].is_null()) {
+    if (!in["robot_id"].is_string()) {
+      RCLCPP_ERROR(get_logger(), "/robot/lock_status payload robot_id must be a string");
+      return;
+    }
+    if (in["robot_id"].get<std::string>() != robot_id_) {
+      RCLCPP_WARN(
+        get_logger(),
+        "/robot/lock_status ignored for robot_id='%s' expected='%s'",
+        in["robot_id"].get<std::string>().c_str(), robot_id_.c_str());
+      return;
+    }
+  }
+
+  const auto command = in["command"].get<std::string>();
+  if (command != "UNLOCK" && command != "LOCK") {
+    RCLCPP_ERROR(get_logger(), "/robot/lock_status command must be UNLOCK or LOCK");
+    return;
+  }
+
+  const auto status = in["status"].get<std::string>();
+  if (status != "ACCEPTED" && status != "OPENED" && status != "LOCKED" && status != "FAILED") {
+    RCLCPP_ERROR(
+      get_logger(),
+      "/robot/lock_status status must be ACCEPTED, OPENED, LOCKED, or FAILED");
+    return;
+  }
+
+  json out;
+  out["robot_id"] = robot_id_;
+  if (!copyIntegerTaskIdIfPresent(get_logger(), "/robot/lock_status", in, out)) {
+    return;
+  }
+  out["command"] = in["command"];
+  out["status"] = in["status"];
+  if (in.contains("message") && !in["message"].is_null()) {
+    if (!in["message"].is_string()) {
+      RCLCPP_ERROR(get_logger(), "/robot/lock_status message must be a string");
+      return;
+    }
+    out["message"] = in["message"];
+  }
+
+  publishMqtt(topic::LOCK_STATUS, out);
 }
 
 bool MqttBridgeNode::publishMqtt(const std::string & topic_name, const json & payload)
