@@ -100,3 +100,74 @@ def send_lock_command(
     }
     publish(mqtt_topics.SERVER_LOCK_COMMAND, mqtt_payload)
     return {"status": "published", "payload": mqtt_payload}
+
+
+class CompleteTaskRequest(BaseModel):
+    robot_id: str
+
+
+@router.post("/complete-task", status_code=status.HTTP_200_OK)
+async def complete_task_from_tablet(
+    body: CompleteTaskRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Robot-mounted tablet endpoint: marks the active task COMPLETE and publishes
+    server/task_finish with source="tablet_ui". No user auth required.
+
+    Validations:
+      - robot_id must identify a known robot
+      - robot must be in DELIVERY_OPEN_NUR or DELIVERY_OPEN_PAT
+      - robot must have an active (DISPATCHED/IN_PROGRESS) task
+    """
+    from app.models.robot import Robot as RobotModel
+    from app.models.task import Task
+    from app.mqtt.client import publish
+    from app.websocket.manager import ws_manager
+    from app.constants import ws_events
+    from app.schemas.task import TaskRead
+    from app.services.task_service import update_task_status
+
+    robot = db.query(RobotModel).filter(RobotModel.robot_code == body.robot_id).first()
+    if not robot:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Robot '{body.robot_id}' not found",
+        )
+
+    delivery_open_states = {RobotState.DELIVERY_OPEN_NUR, RobotState.DELIVERY_OPEN_PAT}
+    if robot.current_state not in delivery_open_states:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Cannot complete — robot '{body.robot_id}' is in state "
+                f"'{robot.current_state}', expected DELIVERY_OPEN_NUR or DELIVERY_OPEN_PAT"
+            ),
+        )
+
+    active_task = (
+        db.query(Task)
+        .filter(
+            Task.assigned_robot_id == robot.id,
+            Task.status.in_([TaskStatus.DISPATCHED, TaskStatus.IN_PROGRESS]),
+        )
+        .order_by(Task.created_at.desc())
+        .first()
+    )
+    if not active_task:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"No active task found for robot '{body.robot_id}'",
+        )
+
+    task = update_task_status(db, active_task.id, TaskStatus.COMPLETE)
+    task_dict = TaskRead.model_validate(task).model_dump(mode="json")
+    await ws_manager.broadcast(ws_events.TASK_STATUS_UPDATE, task_dict)
+
+    publish(mqtt_topics.SERVER_TASK_FINISH, {
+        "robot_id": body.robot_id,
+        "task_id": active_task.id,
+        "source": "tablet_ui",
+    })
+
+    return {"status": "completed", "task_id": active_task.id}

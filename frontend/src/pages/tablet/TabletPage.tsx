@@ -17,7 +17,7 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import { useParams }                    from 'react-router-dom'
-import { fetchRobotStatus, sendLockCommand } from '@/api/robot'
+import { fetchRobotStatus, sendLockCommand, completeRobotTask } from '@/api/robot'
 import { fetchOngoingTasks }            from '@/api/tasks'
 import { ROBOT_STATE_LABELS, ROBOT_STATE_STYLE } from '@/constants/robotStateLabels'
 import type { RobotState, RobotStatus, Task, WsMessage, WsLockStatusUpdate } from '@/types'
@@ -176,9 +176,9 @@ export function TabletPage() {
     setActionError(null)
     setLockPhase('locking')
     try {
-      await sendLockCommand(robotId, 'LOCK')
+      await completeRobotTask(robotId)
     } catch (err: unknown) {
-      setActionError(err instanceof Error ? err.message : '잠금 요청 실패')
+      setActionError(err instanceof Error ? err.message : '작업 완료 처리 실패')
       setLockPhase('idle')
     }
   }
