@@ -26,6 +26,7 @@ import { NurseDashboard }           from '@/pages/nurse/NurseDashboard'
 import { RobotDashboard }           from '@/pages/nurse/RobotDashboard'
 import { OrderCreate }              from '@/pages/nurse/OrderCreate'
 import { PatientRequestPage }       from '@/pages/patient/PatientRequestPage'
+import { TabletPage }               from '@/pages/tablet/TabletPage'
 
 export default function App() {
   const { token } = useAuthStore()
@@ -61,6 +62,9 @@ export default function App() {
         path="/patient"
         element={<ProtectedRoute role="patient"><PatientRequestPage /></ProtectedRoute>}
       />
+
+      {/* Robot-mounted tablet — no auth required */}
+      <Route path="/tablet/:robotId" element={<TabletPage />} />
 
       {/* Catch-all */}
       <Route path="*" element={<Navigate to="/" replace />} />

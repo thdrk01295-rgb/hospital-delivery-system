@@ -4,15 +4,14 @@ export type RobotState =
   | 'IDLE'
   | 'MOVING'
   | 'ARRIVED'
-  | 'WAIT_NFC'
-  | 'AUTH_SUCCESS'
-  | 'AUTH_FAIL'
+  | 'WAIT_UNLOCK'
   | 'DELIVERY_OPEN_NUR'
   | 'DELIVERY_OPEN_PAT'
   | 'COMPLETE'
   | 'LOW_BATTERY'
   | 'CHARGING_BATTERY'
   | 'ERROR'
+  | 'EMERGENCY'
 
 export interface RobotStatus {
   id: number
@@ -170,6 +169,7 @@ export type WsEventType =
   | 'task_status_update'
   | 'inventory_update'
   | 'abnormal_event_update'
+  | 'lock_status_update'
 
 export interface WsMessage<T = unknown> {
   event: WsEventType
@@ -188,6 +188,14 @@ export interface WsAbnormalEventUpdate {
   active: boolean
   note?: string
   related_task_id?: number
+}
+
+export interface WsLockStatusUpdate {
+  robot_id: string
+  task_id: number | null
+  command: 'UNLOCK' | 'LOCK'
+  status: 'ACCEPTED' | 'OPENED' | 'LOCKED' | 'FAILED'
+  message: string | null
 }
 
 // ── Patient screen mode ───────────────────────────────────────────────────────

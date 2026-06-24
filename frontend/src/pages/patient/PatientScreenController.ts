@@ -22,7 +22,7 @@
  */
 import type { Task, RobotState, PatientScreenMode } from '@/types'
 
-const ABNORMAL_STATES: RobotState[] = ['ERROR', 'LOW_BATTERY', 'CHARGING_BATTERY']
+const ABNORMAL_STATES: RobotState[] = ['ERROR', 'LOW_BATTERY', 'CHARGING_BATTERY', 'EMERGENCY']
 const ACTIVE_STATUSES = ['PENDING', 'DISPATCHED', 'IN_PROGRESS'] as const
 
 export function resolvePatientScreenMode(

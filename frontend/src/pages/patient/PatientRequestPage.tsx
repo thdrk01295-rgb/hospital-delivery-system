@@ -203,9 +203,10 @@ function CompleteScreen() {
 
 function RobotStatusScreen({ state }: { state: RobotState }) {
   const MSGS: Partial<Record<RobotState, string>> = {
-    ERROR:           'ERROR. 관리자에게 문의하세요',
-    LOW_BATTERY:     '충전이 필요합니다',
-    CHARGING_BATTERY: '충전중',
+    ERROR:            'ERROR. 관리자에게 문의하세요',
+    LOW_BATTERY:      '충전이 필요합니다',
+    CHARGING_BATTERY: '충전 중입니다',
+    EMERGENCY:        '비상 정지 상태입니다. 잠시만 기다려 주세요',
   }
   return (
     <div style={{ ...centerBox, background: '#fdedec' }}>
