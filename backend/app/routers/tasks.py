@@ -18,6 +18,7 @@ from app.services.task_service import (
 )
 from app.services.abnormal_event_service import open_event, resolve_all_by_type
 from app.services.auth_service import decode_token
+from app.services.task_lock_phase_store import clear_task_lock_phase
 from app.constants.enums import TaskType, TaskStatus
 from app.constants import ws_events, mqtt_topics
 from app.websocket.manager import ws_manager
@@ -97,8 +98,7 @@ async def nurse_cancel_task(
     task = update_task_status(db, task_id, TaskStatus.CANCELLED)
     task_dict = TaskRead.model_validate(task).model_dump(mode="json")
     await ws_manager.broadcast(ws_events.TASK_STATUS_UPDATE, task_dict)
-    from app.mqtt.handlers import _task_lock_phases
-    _task_lock_phases.pop(task_id, None)
+    clear_task_lock_phase(task_id)
     return task
 
 
@@ -124,6 +124,7 @@ async def trigger_emergency(
     )
     if active_task:
         active_task = requeue_task(db, active_task.id)
+        clear_task_lock_phase(active_task.id)  # stale RELOCKED must not survive re-dispatch
         requeued_dict = TaskRead.model_validate(active_task).model_dump(mode="json")
         await ws_manager.broadcast(ws_events.TASK_STATUS_UPDATE, requeued_dict)
 
@@ -298,8 +299,7 @@ async def patient_cancel_task(
     task = update_task_status(db, task.id, TaskStatus.CANCELLED)
     task_dict = TaskRead.model_validate(task).model_dump(mode="json")
     await ws_manager.broadcast(ws_events.TASK_STATUS_UPDATE, task_dict)
-    from app.mqtt.handlers import _task_lock_phases
-    _task_lock_phases.pop(task.id, None)
+    clear_task_lock_phase(task.id)
     return task
 
 

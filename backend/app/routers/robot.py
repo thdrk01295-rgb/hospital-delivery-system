@@ -6,6 +6,7 @@ from typing import Optional
 from app.db.session import get_db
 from app.schemas.robot import RobotStatusRead
 from app.services.robot_service import get_or_create_robot, get_robot_status_dict
+from app.services.task_lock_phase_store import get_task_lock_phase, clear_task_lock_phase
 from app.constants import mqtt_topics
 from app.constants.enums import RobotState, TaskStatus
 
@@ -172,8 +173,7 @@ async def complete_task_from_tablet(
         )
 
     # v4 Lock Completion Guard: compartment must have been opened AND re-locked
-    from app.mqtt.handlers import _task_lock_phases
-    if _task_lock_phases.get(active_task.id) != "RELOCKED":
+    if get_task_lock_phase(active_task.id) != "RELOCKED":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="잠금버튼을 눌러주세요",
@@ -189,6 +189,6 @@ async def complete_task_from_tablet(
         "source": "tablet_ui",
     })
 
-    _task_lock_phases.pop(active_task.id, None)
+    clear_task_lock_phase(active_task.id)
 
     return {"status": "completed", "task_id": active_task.id}

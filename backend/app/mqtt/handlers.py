@@ -17,6 +17,11 @@ from app.schemas.robot import (
     MqttLockStatusPayload,
 )
 from app.constants.enums import RobotState, TaskStatus
+from app.services.task_lock_phase_store import (
+    get_task_lock_phase,
+    set_task_lock_phase,
+    clear_task_lock_phase,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -25,10 +30,6 @@ _loop: asyncio.AbstractEventLoop | None = None
 
 # Pending WAIT_UNLOCK timeout asyncio Tasks — keyed by task_id
 _wait_unlock_tasks: dict[int, asyncio.Task] = {}
-
-# v4 Lock Completion Guard: per-task lock phase — in-memory, lost on restart.
-# TODO: persist to DB if restart resilience is required.
-_task_lock_phases: dict[int, str] = {}
 
 
 def set_event_loop(loop: asyncio.AbstractEventLoop) -> None:
@@ -89,6 +90,7 @@ async def _run_wait_unlock_timeout(task_id: int, robot_code: str) -> None:
         return
 
     _wait_unlock_tasks.pop(task_id, None)
+    clear_task_lock_phase(task_id)  # defensive: no entry should exist here, but clear to be safe
     logger.warning(
         f"[WAIT_UNLOCK] Timeout expired ({timeout}s) for task_id={task_id}, "
         f"robot={robot_code} — marking task FAILED"
@@ -191,12 +193,14 @@ def _handle_robot_status(raw: dict) -> None:
         status_dict = get_robot_status_dict(robot)
         _schedule(ws_manager.broadcast(ws_events.ROBOT_STATE_UPDATE, status_dict))
 
-        # WAIT_UNLOCK: start server-side timeout when robot awaits compartment unlock
+        # WAIT_UNLOCK: start server-side timeout when robot awaits compartment unlock.
+        # Also clear any stale lock phase so a re-dispatched task starts fresh.
         if data.state == RobotState.WAIT_UNLOCK and data.task_id is not None:
             from app.config.settings import settings
+            clear_task_lock_phase(data.task_id)
             logger.info(
                 f"[WAIT_UNLOCK] robot={data.robot_id} task_id={data.task_id} "
-                f"— starting {settings.WAIT_UNLOCK_TIMEOUT_SECONDS}s timeout"
+                f"— cleared stale lock phase, starting {settings.WAIT_UNLOCK_TIMEOUT_SECONDS}s timeout"
             )
             _start_wait_unlock_timeout(data.task_id, data.robot_id)
 
@@ -346,7 +350,7 @@ def _handle_low_battery(db, robot) -> None:
         task_dict = TaskRead.model_validate(active_task).model_dump(mode="json")
         _schedule(ws_manager.broadcast(ws_events.TASK_STATUS_UPDATE, task_dict))
         # v4: clear any stale lock phase so the re-dispatched task must earn RELOCKED again
-        _task_lock_phases.pop(active_task.id, None)
+        clear_task_lock_phase(active_task.id)
     else:
         logger.info(
             f"[LOW BATTERY] No active task on robot {robot.robot_code} — skipping server/task_cancel"
@@ -480,19 +484,19 @@ def _handle_lock_status(raw: dict) -> None:
     # v4: Update lock phase — OPENED on UNLOCK+OPENED, RELOCKED on LOCK+LOCKED only after OPENED.
     if data.task_id is not None:
         if data.command == "UNLOCK" and data.status == "OPENED":
-            _task_lock_phases[data.task_id] = "OPENED"
+            set_task_lock_phase(data.task_id, "OPENED")
             logger.info(f"[lock_phase] task_id={data.task_id} → OPENED")
         elif data.command == "LOCK" and data.status == "LOCKED":
-            if _task_lock_phases.get(data.task_id) == "OPENED":
-                _task_lock_phases[data.task_id] = "RELOCKED"
+            if get_task_lock_phase(data.task_id) == "OPENED":
+                set_task_lock_phase(data.task_id, "RELOCKED")
                 logger.info(f"[lock_phase] task_id={data.task_id} → RELOCKED")
             else:
                 logger.debug(
                     f"[lock_phase] LOCK+LOCKED for task_id={data.task_id} without prior OPENED "
-                    f"(phase={_task_lock_phases.get(data.task_id)}) — not advancing to RELOCKED"
+                    f"(phase={get_task_lock_phase(data.task_id)}) — not advancing to RELOCKED"
                 )
 
-    lock_phase = _task_lock_phases.get(data.task_id) if data.task_id is not None else None
+    lock_phase = get_task_lock_phase(data.task_id) if data.task_id is not None else None
 
     _schedule(ws_manager.broadcast(
         ws_events.LOCK_STATUS_UPDATE,
@@ -538,7 +542,7 @@ def _handle_task_complete(raw: dict) -> None:
             logger.warning(f"robot/task_complete: task {data.task_id} not found")
             return
 
-        _task_lock_phases.pop(data.task_id, None)
+        clear_task_lock_phase(data.task_id)
         task_dict = TaskRead.model_validate(task).model_dump(mode="json")
         _schedule(ws_manager.broadcast(ws_events.TASK_STATUS_UPDATE, task_dict))
 
