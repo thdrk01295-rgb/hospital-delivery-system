@@ -141,6 +141,7 @@ private:
   void reset_to_idle();
   bool is_patient_task() const;
   bool is_battery_low_task() const;
+  bool requires_task_finish(const ActiveTask & task) const;
   bool is_supported_task_type(const std::string & task_type) const;
 
   static std::string state_to_string(TaskState s);

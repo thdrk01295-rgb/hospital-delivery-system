@@ -691,8 +691,10 @@ void TaskManagerNode::on_unloading_timer()
     RCLCPP_WARN(get_logger(), "Unloading timer fired outside UNLOADING — ignored");
     return;
   }
-  if (is_patient_task()) {
-    RCLCPP_INFO(get_logger(), "Patient task unloading waits for server task_finish");
+  if (requires_task_finish(*active_task_)) {
+    RCLCPP_INFO(get_logger(),
+      "Task type %s waits for server task_finish in DELIVERY_OPEN state",
+      active_task_->task_type.c_str());
     return;
   }
   RCLCPP_INFO(get_logger(), "Unloading timer expired — task complete");
@@ -729,6 +731,20 @@ void TaskManagerNode::transition_to(TaskState next)
     RCLCPP_ERROR(get_logger(), "Invalid transition to %s without active task",
       state_to_string(next).c_str());
     enter_error("invalid state transition without active task");
+    return;
+  }
+
+  if (next == TaskState::TASK_COMPLETE && active_task_ &&
+    requires_task_finish(*active_task_))
+  {
+    RCLCPP_WARN(get_logger(),
+      "Blocked automatic TASK_COMPLETE for task_id=%d type=%s; waiting for server task_finish",
+      active_task_->task_id, active_task_->task_type.c_str());
+    if (state_ != TaskState::UNLOADING) {
+      state_ = TaskState::UNLOADING;
+      publish_task_state();
+    }
+    waiting_patient_finish_ = is_patient_task();
     return;
   }
 
@@ -801,10 +817,11 @@ void TaskManagerNode::transition_to(TaskState next)
 
     case TaskState::UNLOADING:
 #ifndef USE_NFC_TRIGGER
-      if (is_patient_task()) {
-        waiting_patient_finish_ = true;
+      if (requires_task_finish(*active_task_)) {
+        waiting_patient_finish_ = is_patient_task();
         RCLCPP_INFO(get_logger(),
-          "DELIVERY_OPEN_PAT — patient task waits for server task_finish");
+          "%s — task type %s waits for server task_finish",
+          state_to_robot_state(state_).c_str(), active_task_->task_type.c_str());
       } else {
         RCLCPP_INFO(get_logger(),
           "DELIVERY_OPEN_NUR — starting unloading timer (%.1fs)", UNLOADING_TIMER_SEC);
@@ -817,6 +834,10 @@ void TaskManagerNode::transition_to(TaskState next)
         waiting_patient_finish_ = true;
         RCLCPP_INFO(get_logger(),
           "DELIVERY_OPEN_PAT — patient task waits for server task_finish");
+      } else if (requires_task_finish(*active_task_)) {
+        RCLCPP_INFO(get_logger(),
+          "DELIVERY_OPEN_NUR — task type %s waits for server task_finish",
+          active_task_->task_type.c_str());
       } else {
         RCLCPP_INFO(get_logger(), "DELIVERY_OPEN_NUR — waiting for NFC trigger");
       }
@@ -1109,6 +1130,17 @@ bool TaskManagerNode::is_patient_task() const
 bool TaskManagerNode::is_battery_low_task() const
 {
   return active_task_ && active_task_->task_type == "battery_low";
+}
+
+bool TaskManagerNode::requires_task_finish(const ActiveTask & task) const
+{
+  return task.task_type == "clothes_refill" ||
+    task.task_type == "kit_delivery" ||
+    task.task_type == "specimen_delivery" ||
+    task.task_type == "logistics_delivery" ||
+    task.task_type == "used_clothes_collection" ||
+    task.task_type == "patient_clothes_rental" ||
+    task.task_type == "patient_clothes_return";
 }
 
 bool TaskManagerNode::is_supported_task_type(const std::string & task_type) const
