@@ -345,6 +345,8 @@ def _handle_low_battery(db, robot) -> None:
         logger.info(f"[LOW BATTERY] Task {active_task.id} requeued to PENDING")
         task_dict = TaskRead.model_validate(active_task).model_dump(mode="json")
         _schedule(ws_manager.broadcast(ws_events.TASK_STATUS_UPDATE, task_dict))
+        # v4: clear any stale lock phase so the re-dispatched task must earn RELOCKED again
+        _task_lock_phases.pop(active_task.id, None)
     else:
         logger.info(
             f"[LOW BATTERY] No active task on robot {robot.robot_code} — skipping server/task_cancel"
@@ -536,6 +538,7 @@ def _handle_task_complete(raw: dict) -> None:
             logger.warning(f"robot/task_complete: task {data.task_id} not found")
             return
 
+        _task_lock_phases.pop(data.task_id, None)
         task_dict = TaskRead.model_validate(task).model_dump(mode="json")
         _schedule(ws_manager.broadcast(ws_events.TASK_STATUS_UPDATE, task_dict))
 

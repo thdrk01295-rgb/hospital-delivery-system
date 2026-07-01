@@ -97,6 +97,8 @@ async def nurse_cancel_task(
     task = update_task_status(db, task_id, TaskStatus.CANCELLED)
     task_dict = TaskRead.model_validate(task).model_dump(mode="json")
     await ws_manager.broadcast(ws_events.TASK_STATUS_UPDATE, task_dict)
+    from app.mqtt.handlers import _task_lock_phases
+    _task_lock_phases.pop(task_id, None)
     return task
 
 
@@ -296,6 +298,8 @@ async def patient_cancel_task(
     task = update_task_status(db, task.id, TaskStatus.CANCELLED)
     task_dict = TaskRead.model_validate(task).model_dump(mode="json")
     await ws_manager.broadcast(ws_events.TASK_STATUS_UPDATE, task_dict)
+    from app.mqtt.handlers import _task_lock_phases
+    _task_lock_phases.pop(task.id, None)
     return task
 
 
