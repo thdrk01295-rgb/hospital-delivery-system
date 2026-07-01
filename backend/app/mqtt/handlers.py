@@ -26,6 +26,10 @@ _loop: asyncio.AbstractEventLoop | None = None
 # Pending WAIT_UNLOCK timeout asyncio Tasks — keyed by task_id
 _wait_unlock_tasks: dict[int, asyncio.Task] = {}
 
+# v4 Lock Completion Guard: per-task lock phase — in-memory, lost on restart.
+# TODO: persist to DB if restart resilience is required.
+_task_lock_phases: dict[int, str] = {}
+
 
 def set_event_loop(loop: asyncio.AbstractEventLoop) -> None:
     global _loop
@@ -458,8 +462,9 @@ def _handle_robot_error(raw: dict) -> None:
 
 def _handle_lock_status(raw: dict) -> None:
     """
-    Handles robot/lock_status (v3).
-    Broadcasts lock_status_update WebSocket event for the dashboard.
+    Handles robot/lock_status (v4).
+    Tracks lock phase per task for the Lock Completion Guard.
+    Broadcasts lock_status_update with lock_phase for the tablet UI.
     Cancels the WAIT_UNLOCK timeout only when command=UNLOCK and status=OPENED.
     """
     from app.websocket.manager import ws_manager
@@ -470,6 +475,23 @@ def _handle_lock_status(raw: dict) -> None:
         f"command={data.command} status={data.status}"
     )
 
+    # v4: Update lock phase — OPENED on UNLOCK+OPENED, RELOCKED on LOCK+LOCKED only after OPENED.
+    if data.task_id is not None:
+        if data.command == "UNLOCK" and data.status == "OPENED":
+            _task_lock_phases[data.task_id] = "OPENED"
+            logger.info(f"[lock_phase] task_id={data.task_id} → OPENED")
+        elif data.command == "LOCK" and data.status == "LOCKED":
+            if _task_lock_phases.get(data.task_id) == "OPENED":
+                _task_lock_phases[data.task_id] = "RELOCKED"
+                logger.info(f"[lock_phase] task_id={data.task_id} → RELOCKED")
+            else:
+                logger.debug(
+                    f"[lock_phase] LOCK+LOCKED for task_id={data.task_id} without prior OPENED "
+                    f"(phase={_task_lock_phases.get(data.task_id)}) — not advancing to RELOCKED"
+                )
+
+    lock_phase = _task_lock_phases.get(data.task_id) if data.task_id is not None else None
+
     _schedule(ws_manager.broadcast(
         ws_events.LOCK_STATUS_UPDATE,
         {
@@ -478,6 +500,7 @@ def _handle_lock_status(raw: dict) -> None:
             "command": data.command,
             "status": data.status,
             "message": data.message,
+            "lock_phase": lock_phase,
         },
     ))
 

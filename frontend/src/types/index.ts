@@ -196,6 +196,7 @@ export interface WsLockStatusUpdate {
   command: 'UNLOCK' | 'LOCK'
   status: 'ACCEPTED' | 'OPENED' | 'LOCKED' | 'FAILED'
   message: string | null
+  lock_phase: 'WAITING_UNLOCK' | 'OPENED' | 'RELOCKED' | null
 }
 
 // ── Patient screen mode ───────────────────────────────────────────────────────

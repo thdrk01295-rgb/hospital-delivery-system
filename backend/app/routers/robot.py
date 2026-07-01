@@ -64,6 +64,17 @@ def send_lock_command(
             ),
         )
 
+    # LOCK is only valid when the compartment is open (delivery states)
+    delivery_open_states = {RobotState.DELIVERY_OPEN_NUR, RobotState.DELIVERY_OPEN_PAT}
+    if body.command == "LOCK" and robot.current_state not in delivery_open_states:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"LOCK rejected — robot '{body.robot_id}' is in state "
+                f"'{robot.current_state}', expected DELIVERY_OPEN_NUR or DELIVERY_OPEN_PAT"
+            ),
+        )
+
     # Resolve the robot's current active task
     from app.models.task import Task
     active_task = (
@@ -160,6 +171,14 @@ async def complete_task_from_tablet(
             detail=f"No active task found for robot '{body.robot_id}'",
         )
 
+    # v4 Lock Completion Guard: compartment must have been opened AND re-locked
+    from app.mqtt.handlers import _task_lock_phases
+    if _task_lock_phases.get(active_task.id) != "RELOCKED":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="잠금버튼을 눌러주세요",
+        )
+
     task = update_task_status(db, active_task.id, TaskStatus.COMPLETE)
     task_dict = TaskRead.model_validate(task).model_dump(mode="json")
     await ws_manager.broadcast(ws_events.TASK_STATUS_UPDATE, task_dict)
@@ -169,5 +188,7 @@ async def complete_task_from_tablet(
         "task_id": active_task.id,
         "source": "tablet_ui",
     })
+
+    _task_lock_phases.pop(active_task.id, None)
 
     return {"status": "completed", "task_id": active_task.id}

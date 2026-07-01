@@ -4,16 +4,17 @@
  * No auth required. The tablet is robot-context based: it knows only
  * the robotId from the URL and all actions are gated on robot state.
  *
- * State → Action mapping:
- *   WAIT_UNLOCK              → Unlock button (POST /robot/lock-command UNLOCK)
- *   DELIVERY_OPEN_NUR/PAT    → Complete button (POST /robot/lock-command LOCK)
- *   LOW_BATTERY/ERROR/EMERG  → Warning screen, no action
- *   All other states         → State display only
+ * v4 Lock Completion Guard state → action mapping:
+ *   WAIT_UNLOCK                              → Unlock button
+ *   DELIVERY_OPEN_NUR/PAT + phase=OPENED     → Lock button (Complete disabled + red hint)
+ *   DELIVERY_OPEN_NUR/PAT + phase=RELOCKED   → Complete button enabled
+ *   LOW_BATTERY/ERROR/EMERG                  → Warning screen, no action
+ *   All other states                         → State display only
  *
  * WebSocket events consumed locally (not via global useWebSocket hook):
  *   robot_state_update, robot_battery_update, robot_location_update
  *   task_status_update (to show active task info)
- *   lock_status_update (to drive the unlock loading state)
+ *   lock_status_update (lock_phase field drives taskLockPhase)
  */
 import { useEffect, useRef, useState } from 'react'
 import { useParams }                    from 'react-router-dom'
@@ -24,7 +25,7 @@ import type { RobotState, RobotStatus, Task, WsMessage, WsLockStatusUpdate } fro
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-type LockPhase = 'idle' | 'unlocking' | 'locking'
+type TaskLockPhase = 'WAITING_UNLOCK' | 'OPENED' | 'RELOCKED'
 
 const WARNING_STATES = new Set<RobotState>(['LOW_BATTERY', 'ERROR', 'EMERGENCY'])
 const OPEN_STATES    = new Set<RobotState>(['DELIVERY_OPEN_NUR', 'DELIVERY_OPEN_PAT'])
@@ -58,13 +59,13 @@ const RECONNECT_DELAY_MS = 3000
 export function TabletPage() {
   const { robotId = 'AMR-001' } = useParams<{ robotId: string }>()
 
-  const [robot,       setRobot]       = useState<RobotStatus | null>(null)
-  const [activeTask,  setActiveTask]  = useState<Task | null>(null)
-  const [lockPhase,   setLockPhase]   = useState<LockPhase>('idle')
-  const [actionError, setActionError] = useState<string | null>(null)
-  const [now,         setNow]         = useState<Date>(new Date())
+  const [robot,             setRobot]             = useState<RobotStatus | null>(null)
+  const [activeTask,        setActiveTask]         = useState<Task | null>(null)
+  const [taskLockPhase,     setTaskLockPhase]      = useState<TaskLockPhase | null>(null)
+  const [lockActionPending, setLockActionPending]  = useState(false)
+  const [actionError,       setActionError]        = useState<string | null>(null)
+  const [now,               setNow]               = useState<Date>(new Date())
 
-  // Ref so WS closure can access latest robot DB id without re-subscribing
   const robotDbIdRef = useRef<number | null>(null)
   const wsRef        = useRef<WebSocket | null>(null)
 
@@ -103,9 +104,23 @@ export function TabletPage() {
           switch (msg.event) {
             case 'robot_state_update':
             case 'robot_battery_update':
-            case 'robot_location_update':
-              setRobot((prev) => prev ? { ...prev, ...(msg.data as Partial<RobotStatus>) } : null)
+            case 'robot_location_update': {
+              const update = msg.data as Partial<RobotStatus>
+              setRobot((prev) => prev ? { ...prev, ...update } : null)
+              if (msg.event === 'robot_state_update' && update.current_state) {
+                const s = update.current_state as RobotState
+                if (s === 'WAIT_UNLOCK') {
+                  setTaskLockPhase('WAITING_UNLOCK')
+                  setLockActionPending(false)
+                  setActionError(null)
+                } else if (RESET_STATES.has(s)) {
+                  setTaskLockPhase(null)
+                  setLockActionPending(false)
+                  setActionError(null)
+                }
+              }
               break
+            }
 
             case 'task_status_update': {
               const t = msg.data as Task
@@ -118,16 +133,13 @@ export function TabletPage() {
             case 'lock_status_update': {
               const d = msg.data as WsLockStatusUpdate
               if (d.robot_id !== robotId) break
-              if (d.command === 'UNLOCK') {
-                if (d.status === 'ACCEPTED' || d.status === 'OPENED') {
-                  setLockPhase('unlocking')
-                } else if (d.status === 'FAILED') {
-                  setActionError('잠금 해제 실패. 다시 시도해주세요.')
-                  setLockPhase('idle')
-                }
-              } else if (d.command === 'LOCK' && d.status === 'LOCKED') {
-                setLockPhase('idle')
+              if (d.lock_phase === 'OPENED' || d.lock_phase === 'RELOCKED') {
+                setTaskLockPhase(d.lock_phase)
               }
+              if (d.status === 'FAILED') {
+                setActionError('잠금 처리 실패. 다시 시도해주세요.')
+              }
+              setLockActionPending(false)
               break
             }
           }
@@ -145,41 +157,39 @@ export function TabletPage() {
     }
   }, [robotId])
 
-  // ── Sync lockPhase with robot state transitions ───────────────────────────
-  useEffect(() => {
-    const state = robot?.current_state as RobotState | undefined
-    if (!state) return
-    if (OPEN_STATES.has(state)) {
-      // Compartment opened → show Complete button
-      setLockPhase((prev) => (prev === 'locking' ? 'locking' : 'idle'))
-    }
-    if (RESET_STATES.has(state)) {
-      setLockPhase('idle')
-      setActionError(null)
-    }
-  }, [robot?.current_state])
-
   // ── Actions ───────────────────────────────────────────────────────────────
 
   async function handleUnlock() {
     setActionError(null)
-    setLockPhase('unlocking')
+    setLockActionPending(true)
     try {
       await sendLockCommand(robotId, 'UNLOCK')
     } catch (err: unknown) {
       setActionError(err instanceof Error ? err.message : '잠금 해제 요청 실패')
-      setLockPhase('idle')
+      setLockActionPending(false)
+    }
+  }
+
+  async function handleLock() {
+    setActionError(null)
+    setLockActionPending(true)
+    try {
+      await sendLockCommand(robotId, 'LOCK')
+    } catch (err: unknown) {
+      setActionError(err instanceof Error ? err.message : '잠금 요청 실패')
+      setLockActionPending(false)
     }
   }
 
   async function handleComplete() {
+    if (taskLockPhase !== 'RELOCKED') return
     setActionError(null)
-    setLockPhase('locking')
+    setLockActionPending(true)
     try {
       await completeRobotTask(robotId)
     } catch (err: unknown) {
       setActionError(err instanceof Error ? err.message : '작업 완료 처리 실패')
-      setLockPhase('idle')
+      setLockActionPending(false)
     }
   }
 
@@ -191,6 +201,9 @@ export function TabletPage() {
   const isWarning  = WARNING_STATES.has(state)
   const isOpen     = OPEN_STATES.has(state)
   const isWaiting  = state === 'WAIT_UNLOCK'
+
+  const needsLock  = isOpen && taskLockPhase === 'OPENED'
+  const canComplete = isOpen && taskLockPhase === 'RELOCKED'
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -299,46 +312,64 @@ export function TabletPage() {
         )}
 
         {/* ─── WAIT_UNLOCK: Unlock button ─── */}
-        {isWaiting && !isWarning && lockPhase === 'idle' && (
+        {isWaiting && !isWarning && (
           <div style={{ textAlign: 'center' }}>
             <p style={{ color: 'rgba(255,255,255,0.55)', marginBottom: '2rem', fontSize: '1.05rem' }}>
               작업함 잠금을 해제하려면 아래 버튼을 누르세요
             </p>
-            <button onClick={handleUnlock} style={unlockBtnStyle}>
-              🔓 잠금 해제
+            <button
+              onClick={handleUnlock}
+              disabled={lockActionPending}
+              style={{ ...unlockBtnStyle, opacity: lockActionPending ? 0.55 : 1 }}
+            >
+              {lockActionPending ? '처리 중...' : '🔓 잠금해제'}
             </button>
           </div>
         )}
 
-        {/* ─── Unlocking loading ─── */}
-        {isWaiting && !isWarning && lockPhase === 'unlocking' && (
-          <div style={{ textAlign: 'center', color: 'rgba(255,255,255,0.7)' }}>
-            <div style={{ fontSize: '3.5rem', marginBottom: '1rem' }}>⏳</div>
-            <p style={{ fontSize: '1.3rem', fontWeight: 600 }}>잠금 해제 중...</p>
-            <p style={{ fontSize: '0.9rem', color: 'rgba(255,255,255,0.4)', marginTop: 6 }}>
-              로봇의 응답을 기다리고 있습니다
-            </p>
-          </div>
-        )}
-
-        {/* ─── DELIVERY_OPEN: Complete button ─── */}
+        {/* ─── DELIVERY_OPEN states ─── */}
         {isOpen && !isWarning && (
           <div style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>📦</div>
+            <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>
+              {canComplete ? '🔒' : '📦'}
+            </div>
             <p style={{ color: 'rgba(255,255,255,0.7)', marginBottom: '0.5rem', fontSize: '1.1rem', fontWeight: 600 }}>
-              작업함이 열렸습니다
+              {canComplete ? '잠금 완료' : '작업함이 열렸습니다'}
             </p>
             <p style={{ color: 'rgba(255,255,255,0.45)', marginBottom: '2rem', fontSize: '0.95rem' }}>
-              {state === 'DELIVERY_OPEN_PAT'
-                ? '환자가 의류를 수령한 후 완료 버튼을 누르세요'
-                : '물품 작업을 완료한 후 완료 버튼을 누르세요'}
+              {canComplete
+                ? (state === 'DELIVERY_OPEN_PAT' ? '의류 수령 및 잠금이 확인되었습니다' : '작업 완료 및 잠금이 확인되었습니다')
+                : (state === 'DELIVERY_OPEN_PAT' ? '환자가 의류를 수령한 후 잠금 버튼을 누르세요' : '물품 작업을 완료한 후 잠금 버튼을 누르세요')}
             </p>
+
+            {/* Lock button — only when OPENED */}
+            {needsLock && (
+              <>
+                <button
+                  onClick={handleLock}
+                  disabled={lockActionPending}
+                  style={{ ...lockBtnStyle, opacity: lockActionPending ? 0.55 : 1 }}
+                >
+                  {lockActionPending ? '처리 중...' : '🔒 잠금'}
+                </button>
+                <p style={{ color: '#e74c3c', marginTop: '1rem', fontSize: '0.95rem', fontWeight: 600 }}>
+                  잠금버튼을 눌러주세요
+                </p>
+              </>
+            )}
+
+            {/* Complete button — enabled only when RELOCKED */}
             <button
-              onClick={handleComplete}
-              disabled={lockPhase === 'locking'}
-              style={{ ...completeBtnStyle, opacity: lockPhase === 'locking' ? 0.55 : 1 }}
+              onClick={canComplete ? handleComplete : undefined}
+              disabled={!canComplete || lockActionPending}
+              style={{
+                ...completeBtnStyle,
+                marginTop: needsLock ? '1rem' : 0,
+                opacity: (!canComplete || lockActionPending) ? 0.35 : 1,
+                cursor: (!canComplete || lockActionPending) ? 'not-allowed' : 'pointer',
+              }}
             >
-              {lockPhase === 'locking' ? '처리 중...' : '✅ 작업 완료'}
+              {lockActionPending && canComplete ? '처리 중...' : '✅ 작업 완료'}
             </button>
           </div>
         )}
@@ -375,6 +406,19 @@ const unlockBtnStyle: React.CSSProperties = {
   fontWeight: 800,
   cursor: 'pointer',
   boxShadow: '0 6px 20px rgba(230,126,34,0.45)',
+  letterSpacing: '0.02em',
+}
+
+const lockBtnStyle: React.CSSProperties = {
+  background: '#2980b9',
+  color: '#fff',
+  border: 'none',
+  borderRadius: 14,
+  padding: '1.4rem 3.5rem',
+  fontSize: '1.5rem',
+  fontWeight: 800,
+  cursor: 'pointer',
+  boxShadow: '0 6px 20px rgba(41,128,185,0.45)',
   letterSpacing: '0.02em',
 }
 
