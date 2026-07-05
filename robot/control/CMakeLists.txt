@@ -13,6 +13,11 @@ find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
+find_package(rosidl_default_generators REQUIRED)
+
+rosidl_generate_interfaces(${PROJECT_NAME}
+  "srv/MotorCommand.srv"
+)
 
 add_executable(motor_bridge_node src/motor_bridge_node.cpp)
 target_include_directories(motor_bridge_node PRIVATE include)
@@ -23,6 +28,15 @@ ament_target_dependencies(
   geometry_msgs
   sensor_msgs
 )
+
+add_executable(control_motor_bridge_node src/control_motor_bridge_node.cpp)
+ament_target_dependencies(
+  control_motor_bridge_node
+  rclcpp
+  std_msgs
+)
+rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} "rosidl_typesupport_cpp")
+target_link_libraries(control_motor_bridge_node "${cpp_typesupport_target}")
 
 add_executable(encoder_odom_node src/encoder_odom_node.cpp)
 target_include_directories(encoder_odom_node PRIVATE include)
@@ -38,6 +52,7 @@ ament_target_dependencies(
 
 install(TARGETS
   motor_bridge_node
+  control_motor_bridge_node
   encoder_odom_node
   DESTINATION lib/${PROJECT_NAME}
 )
@@ -46,4 +61,5 @@ install(DIRECTORY launch config
   DESTINATION share/${PROJECT_NAME}
 )
 
+ament_export_dependencies(rosidl_default_runtime)
 ament_package()
