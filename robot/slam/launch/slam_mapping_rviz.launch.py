@@ -38,16 +38,16 @@ def generate_launch_description():
             'rviz_config',
             default_value=default_rviz_config
         ),
-        Node(
-            package='slam_toolbox',
-            executable='async_slam_toolbox_node',
-            name='slam_toolbox',
-            output='screen',
-            parameters=[
-                params_file,
-                {'use_sim_time': use_sim_time}
-            ]
-        ),
+        # Node(
+        #     package='slam_toolbox',
+        #     executable='async_slam_toolbox_node',
+        #     name='slam_toolbox',
+        #     output='screen',
+        #     parameters=[
+        #         params_file,
+        #         {'use_sim_time': use_sim_time}
+        #     ]
+        # ),
         Node(
             package='rviz2',
             executable='rviz2',

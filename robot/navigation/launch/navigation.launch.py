@@ -3,7 +3,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, TimerAction
-from launch.conditions import IfCondition, UnlessCondition
+from launch.conditions import IfCondition
 from launch.substitutions import Command, LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
@@ -15,6 +15,7 @@ def generate_launch_description():
     control_dir = get_package_share_directory('control')
     sensor_dir = get_package_share_directory('sensor_components')
     description_dir = get_package_share_directory('description')
+    lidar_dir = get_package_share_directory('rplidar_ros')
 
     params_file = LaunchConfiguration('params_file')
     map_yaml = LaunchConfiguration('map')
@@ -25,9 +26,9 @@ def generate_launch_description():
     ekf_params_file = LaunchConfiguration('ekf_params_file')
     tof_params_file = LaunchConfiguration('tof_params_file')
     collision_guard_params_file = LaunchConfiguration('collision_guard_params_file')
-    use_scan_filter = LaunchConfiguration('use_scan_filter')
-    scan_filter_input_topic = LaunchConfiguration('scan_filter_input_topic')
-    scan_filter_output_topic = LaunchConfiguration('scan_filter_output_topic')
+    laser_filter_params_file = LaunchConfiguration('laser_filter_params_file')
+    laser_filter_input_topic = LaunchConfiguration('laser_filter_input_topic')
+    laser_filter_output_topic = LaunchConfiguration('laser_filter_output_topic')
 
     default_params_file = os.path.join(
         navigation_dir,
@@ -69,6 +70,11 @@ def generate_launch_description():
         'urdf',
         'robot.urdf.xacro'
     )
+    default_laser_filter_params_file = os.path.join(
+        lidar_dir,
+        'config',
+        'front_180_laser_filter.yaml'
+    )
 
     robot_description = ParameterValue(
         Command(['xacro ', default_urdf_file]),
@@ -99,22 +105,15 @@ def generate_launch_description():
         'waypoint_follower',
         'velocity_smoother'
     ]
-    cyglidar_parameters = [{
-        'port_number': LaunchConfiguration('cyglidar_port'),
-        'baud_rate': ParameterValue(LaunchConfiguration('cyglidar_baud_rate'), value_type=int),
-        'frame_id': 'laser_frame',
-        'run_mode': ParameterValue(LaunchConfiguration('cyglidar_run_mode'), value_type=int),
-        'frequency_channel': 0,
-        'duration_mode': 0,
-        'duration_value': 10000,
-        'color_mode': 0,
-        'data_type_3d': 0,
-        'filter_mode': 0,
-        'edge_filter_value': 0,
-        'enable_kalmanfilter': False,
-        'enable_clahe': False,
-        'clahe_cliplimit': 40,
-        'clahe_tiles_grid_size': 8
+    rplidar_parameters = [{
+        'channel_type': 'serial',
+        'serial_port': LaunchConfiguration('rplidar_serial_port'),
+        'serial_baudrate': ParameterValue(LaunchConfiguration('rplidar_serial_baudrate'), value_type=int),
+        'frame_id': LaunchConfiguration('rplidar_frame_id'),
+        'inverted': ParameterValue(LaunchConfiguration('rplidar_inverted'), value_type=bool),
+        'angle_compensate': ParameterValue(LaunchConfiguration('rplidar_angle_compensate'), value_type=bool),
+        'scan_mode': LaunchConfiguration('rplidar_scan_mode'),
+        'scan_frequency': ParameterValue(LaunchConfiguration('rplidar_scan_frequency'), value_type=float)
     }]
 
     return LaunchDescription([
@@ -163,52 +162,44 @@ def generate_launch_description():
             default_value='115200'
         ),
         DeclareLaunchArgument(
-            'cyglidar_port',
+            'rplidar_serial_port',
             default_value='/dev/ttyUSB0'
         ),
         DeclareLaunchArgument(
-            'cyglidar_baud_rate',
-            default_value='0'
+            'rplidar_serial_baudrate',
+            default_value='460800'
         ),
         DeclareLaunchArgument(
-            'cyglidar_run_mode',
-            default_value='0'
+            'rplidar_frame_id',
+            default_value='laser_frame'
         ),
         DeclareLaunchArgument(
-            'use_scan_filter',
+            'rplidar_inverted',
+            default_value='false'
+        ),
+        DeclareLaunchArgument(
+            'rplidar_angle_compensate',
             default_value='true'
         ),
         DeclareLaunchArgument(
-            'scan_filter_input_topic',
+            'rplidar_scan_mode',
+            default_value='Standard'
+        ),
+        DeclareLaunchArgument(
+            'rplidar_scan_frequency',
+            default_value='10.0'
+        ),
+        DeclareLaunchArgument(
+            'laser_filter_params_file',
+            default_value=default_laser_filter_params_file
+        ),
+        DeclareLaunchArgument(
+            'laser_filter_input_topic',
             default_value='/scan_raw'
         ),
         DeclareLaunchArgument(
-            'scan_filter_output_topic',
+            'laser_filter_output_topic',
             default_value='/scan'
-        ),
-        DeclareLaunchArgument(
-            'scan_filter_center_angle_rad',
-            default_value='0.0'
-        ),
-        DeclareLaunchArgument(
-            'scan_filter_remove_angle_width_rad',
-            default_value='0.06'
-        ),
-        DeclareLaunchArgument(
-            'scan_filter_enabled',
-            default_value='true'
-        ),
-        DeclareLaunchArgument(
-            'scan_filter_use_nan',
-            default_value='true'
-        ),
-        DeclareLaunchArgument(
-            'scan_filter_replacement_range',
-            default_value='0.0'
-        ),
-        DeclareLaunchArgument(
-            'scan_filter_debug_log',
-            default_value='false'
         ),
         Node(
             package='robot_state_publisher',
@@ -265,46 +256,28 @@ def generate_launch_description():
             ]
         ),
         Node(
-            package='cyglidar_d2_ros2',
-            executable='cyglidar_d2_publisher',
-            name='cyglidar_d2_publisher',
-            condition=UnlessCondition(use_scan_filter),
+            package='rplidar_ros',
+            executable='rplidarNode',
+            name='rplidar_node',
             output='screen',
-            parameters=cyglidar_parameters
-        ),
-        Node(
-            package='cyglidar_d2_ros2',
-            executable='cyglidar_d2_publisher',
-            name='cyglidar_d2_publisher',
-            condition=IfCondition(use_scan_filter),
-            output='screen',
-            parameters=cyglidar_parameters,
+            parameters=rplidar_parameters,
             remappings=[
-                ('scan', scan_filter_input_topic)
+                ('scan', laser_filter_input_topic)
             ]
         ),
         Node(
-            package='scan_filter',
-            executable='scan_filter_node',
-            name='scan_filter_node',
-            condition=IfCondition(use_scan_filter),
+            package='laser_filters',
+            executable='scan_to_scan_filter_chain',
+            name='scan_to_scan_filter_chain',
             output='screen',
-            parameters=[{
-                'input_scan_topic': scan_filter_input_topic,
-                'output_scan_topic': scan_filter_output_topic,
-                'enabled': ParameterValue(
-                    LaunchConfiguration('scan_filter_enabled'), value_type=bool),
-                'center_angle_rad': ParameterValue(
-                    LaunchConfiguration('scan_filter_center_angle_rad'), value_type=float),
-                'remove_angle_width_rad': ParameterValue(
-                    LaunchConfiguration('scan_filter_remove_angle_width_rad'), value_type=float),
-                'use_nan': ParameterValue(
-                    LaunchConfiguration('scan_filter_use_nan'), value_type=bool),
-                'replacement_range': ParameterValue(
-                    LaunchConfiguration('scan_filter_replacement_range'), value_type=float),
-                'debug_log': ParameterValue(
-                    LaunchConfiguration('scan_filter_debug_log'), value_type=bool)
-            }]
+            parameters=[
+                laser_filter_params_file,
+                {'use_sim_time': use_sim_time}
+            ],
+            remappings=[
+                ('scan', laser_filter_input_topic),
+                ('scan_filtered', laser_filter_output_topic)
+            ]
         ),
         Node(
             package='sensor_components',
