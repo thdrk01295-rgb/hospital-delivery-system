@@ -55,18 +55,20 @@ def send_lock_command(
             detail=f"Robot '{body.robot_id}' not found",
         )
 
-    # UNLOCK is only valid when the robot is waiting for compartment unlock
-    if body.command == "UNLOCK" and robot.current_state != RobotState.WAIT_UNLOCK:
+    # UNLOCK is valid at initial WAIT_UNLOCK or when re-unlocking from a DELIVERY_OPEN state
+    # (repeated lock/unlock cycles: RELOCKED → UNLOCK → OPENED → LOCK → RELOCKED …).
+    delivery_open_states = {RobotState.DELIVERY_OPEN_NUR, RobotState.DELIVERY_OPEN_PAT}
+    unlock_valid_states  = {RobotState.WAIT_UNLOCK} | delivery_open_states
+    if body.command == "UNLOCK" and robot.current_state not in unlock_valid_states:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
                 f"UNLOCK rejected — robot '{body.robot_id}' is in state "
-                f"'{robot.current_state}', expected WAIT_UNLOCK"
+                f"'{robot.current_state}', expected WAIT_UNLOCK or DELIVERY_OPEN"
             ),
         )
 
     # LOCK is only valid when the compartment is open (delivery states)
-    delivery_open_states = {RobotState.DELIVERY_OPEN_NUR, RobotState.DELIVERY_OPEN_PAT}
     if body.command == "LOCK" and robot.current_state not in delivery_open_states:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

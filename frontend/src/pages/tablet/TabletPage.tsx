@@ -4,12 +4,13 @@
  * No auth required. The tablet is robot-context based: it knows only
  * the robotId from the URL and all actions are gated on robot state.
  *
- * v4 Lock Completion Guard state → action mapping:
- *   WAIT_UNLOCK                              → Unlock button
- *   DELIVERY_OPEN_NUR/PAT + phase=OPENED     → Lock button (Complete disabled + red hint)
- *   DELIVERY_OPEN_NUR/PAT + phase=RELOCKED   → Complete button enabled
- *   LOW_BATTERY/ERROR/EMERG                  → Warning screen, no action
- *   All other states                         → State display only
+ * v5 Lock phase toggle model:
+ *   taskLockPhase null/WAITING_UNLOCK → toggle="잠금해제", complete disabled
+ *   taskLockPhase OPENED              → toggle="잠금", complete disabled, red hint
+ *   taskLockPhase RELOCKED            → toggle="잠금해제", complete enabled
+ *   Cycles (OPENED↔RELOCKED) repeat until the user explicitly presses Complete.
+ *   LOW_BATTERY/ERROR/EMERG → Warning screen, no action
+ *   All other states        → State display only
  *
  * WebSocket events consumed locally (not via global useWebSocket hook):
  *   robot_state_update, robot_battery_update, robot_location_update
@@ -171,24 +172,15 @@ export function TabletPage() {
 
   // ── Actions ───────────────────────────────────────────────────────────────
 
-  async function handleUnlock() {
+  async function handleToggle() {
+    // Send LOCK when compartment is open (OPENED), UNLOCK otherwise
+    const command = taskLockPhase === 'OPENED' ? 'LOCK' : 'UNLOCK'
     setActionError(null)
     setLockActionPending(true)
     try {
-      await sendLockCommand(robotId, 'UNLOCK')
+      await sendLockCommand(robotId, command)
     } catch (err: unknown) {
-      setActionError(err instanceof Error ? err.message : '잠금 해제 요청 실패')
-      setLockActionPending(false)
-    }
-  }
-
-  async function handleLock() {
-    setActionError(null)
-    setLockActionPending(true)
-    try {
-      await sendLockCommand(robotId, 'LOCK')
-    } catch (err: unknown) {
-      setActionError(err instanceof Error ? err.message : '잠금 요청 실패')
+      setActionError(err instanceof Error ? err.message : command === 'UNLOCK' ? '잠금 해제 요청 실패' : '잠금 요청 실패')
       setLockActionPending(false)
     }
   }
@@ -214,8 +206,10 @@ export function TabletPage() {
   const isOpen     = OPEN_STATES.has(state)
   const isWaiting  = state === 'WAIT_UNLOCK'
 
-  const needsLock  = isOpen && taskLockPhase === 'OPENED'
+  const isUnlocked  = taskLockPhase === 'OPENED'
   const canComplete = taskLockPhase === 'RELOCKED'
+  const toggleLabel = isUnlocked ? '잠금' : '잠금해제'
+  const toggleStyle = isUnlocked ? lockBtnStyle : unlockBtnStyle
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -323,65 +317,44 @@ export function TabletPage() {
           </div>
         )}
 
-        {/* ─── WAIT_UNLOCK: Unlock button ─── */}
-        {isWaiting && !isWarning && (
+        {/* ─── Compartment interaction (WAIT_UNLOCK + DELIVERY_OPEN) ─── */}
+        {/* Both toggle and Complete always visible; phase controls labels and enable state. */}
+        {(isWaiting || isOpen) && !isWarning && (
           <div style={{ textAlign: 'center' }}>
-            <p style={{ color: 'rgba(255,255,255,0.55)', marginBottom: '2rem', fontSize: '1.05rem' }}>
-              작업함 잠금을 해제하려면 아래 버튼을 누르세요
-            </p>
-            <button
-              onClick={handleUnlock}
-              disabled={lockActionPending}
-              style={{ ...unlockBtnStyle, opacity: lockActionPending ? 0.55 : 1 }}
-            >
-              {lockActionPending ? '처리 중...' : '🔓 잠금해제'}
-            </button>
-          </div>
-        )}
-
-        {/* ─── DELIVERY_OPEN states ─── */}
-        {isOpen && !isWarning && (
-          <div style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>
-              {canComplete ? '🔒' : '📦'}
-            </div>
-            <p style={{ color: 'rgba(255,255,255,0.7)', marginBottom: '0.5rem', fontSize: '1.1rem', fontWeight: 600 }}>
-              {canComplete ? '잠금 완료' : '작업함이 열렸습니다'}
-            </p>
-            <p style={{ color: 'rgba(255,255,255,0.45)', marginBottom: '2rem', fontSize: '0.95rem' }}>
-              {canComplete
-                ? (state === 'DELIVERY_OPEN_PAT' ? '의류 수령 및 잠금이 확인되었습니다' : '작업 완료 및 잠금이 확인되었습니다')
-                : (state === 'DELIVERY_OPEN_PAT' ? '환자가 의류를 수령한 후 잠금 버튼을 누르세요' : '물품 작업을 완료한 후 잠금 버튼을 누르세요')}
-            </p>
-
-            {/* Lock button — only when OPENED */}
-            {needsLock && (
-              <>
-                <button
-                  onClick={handleLock}
-                  disabled={lockActionPending}
-                  style={{ ...lockBtnStyle, opacity: lockActionPending ? 0.55 : 1 }}
-                >
-                  {lockActionPending ? '처리 중...' : '🔒 잠금'}
-                </button>
-                <p style={{ color: '#e74c3c', marginTop: '1rem', fontSize: '0.95rem', fontWeight: 600 }}>
-                  잠금버튼을 눌러주세요
-                </p>
-              </>
+            {/* Contextual hint */}
+            {isWaiting && (
+              <p style={{ color: 'rgba(255,255,255,0.55)', marginBottom: '1.5rem', fontSize: '1.05rem' }}>
+                작업함 잠금을 해제하려면 아래 버튼을 누르세요
+              </p>
+            )}
+            {isOpen && isUnlocked && (
+              <p style={{ color: '#e74c3c', marginBottom: '1rem', fontSize: '0.95rem', fontWeight: 600 }}>
+                잠금버튼을 눌러주세요
+              </p>
             )}
 
-            {/* Complete button — enabled only when RELOCKED */}
+            {/* Toggle button: UNLOCK when locked, LOCK when opened. Always rendered. */}
+            <button
+              onClick={handleToggle}
+              disabled={lockActionPending}
+              style={{ ...toggleStyle, opacity: lockActionPending ? 0.55 : 1 }}
+            >
+              {lockActionPending ? '처리 중...' : `${isUnlocked ? '🔒' : '🔓'} ${toggleLabel}`}
+            </button>
+
+            {/* Complete button: always rendered, enabled only when RELOCKED. */}
             <button
               onClick={canComplete ? handleComplete : undefined}
               disabled={!canComplete || lockActionPending}
               style={{
                 ...completeBtnStyle,
-                marginTop: needsLock ? '1rem' : 0,
+                marginTop: '1.5rem',
+                display: 'block',
                 opacity: (!canComplete || lockActionPending) ? 0.35 : 1,
                 cursor: (!canComplete || lockActionPending) ? 'not-allowed' : 'pointer',
               }}
             >
-              {lockActionPending && canComplete ? '처리 중...' : '✅ 작업 완료'}
+              ✅ 작업 완료
             </button>
           </div>
         )}
