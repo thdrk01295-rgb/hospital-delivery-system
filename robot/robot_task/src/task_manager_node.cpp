@@ -425,12 +425,18 @@ void TaskManagerNode::on_lock_command(const std_msgs::msg::String::SharedPtr msg
       RCLCPP_WARN(get_logger(),
         "lock_command task_id=%d received without active task — ignored",
         *command_task_id);
+      if (command == "UNLOCK") {
+        log_unlock_rejected(command_task_id, "no active task");
+      }
       return;
     }
     if (*command_task_id != active_task_->task_id) {
       RCLCPP_WARN(get_logger(),
         "lock_command task_id mismatch — got %d active %d; ignored",
         *command_task_id, active_task_->task_id);
+      if (command == "UNLOCK") {
+        log_unlock_rejected(command_task_id, "task_id mismatch");
+      }
       return;
     }
   }
@@ -438,12 +444,12 @@ void TaskManagerNode::on_lock_command(const std_msgs::msg::String::SharedPtr msg
   if (command == "UNLOCK") {
     if (!active_task_) {
       RCLCPP_WARN(get_logger(), "UNLOCK received without active task — rejected");
+      log_unlock_rejected(command_task_id, "no active task");
       publish_lock_status(command, "FAILED", "no active task");
       return;
     }
     if (!can_accept_unlock_command()) {
-      RCLCPP_WARN(get_logger(), "UNLOCK received while state is %s — rejected",
-        state_to_string(state_).c_str());
+      log_unlock_rejected(command_task_id, "not waiting for unlock at this stop");
       publish_lock_status(command, "FAILED", "robot is not waiting for unlock at this stop");
       return;
     }
@@ -1349,7 +1355,7 @@ bool TaskManagerNode::is_patient_task() const
 
 bool TaskManagerNode::can_accept_unlock_command() const
 {
-  if (!active_task_ || lock_open_) {
+  if (!active_task_ || lock_open_ || pending_finish_after_lock_) {
     return false;
   }
   if (state_ == TaskState::EMERGENCY ||
@@ -1366,13 +1372,33 @@ bool TaskManagerNode::can_accept_unlock_command() const
   }
   if (unlock_phase_ == "ORIGIN") {
     return state_ == TaskState::AT_ORIGIN ||
-      (state_ == TaskState::LOADING && pending_destination_after_lock_);
+      state_ == TaskState::LOADING;
   }
   if (unlock_phase_ == "DESTINATION") {
     return state_ == TaskState::AT_DESTINATION ||
       state_ == TaskState::UNLOADING;
   }
   return false;
+}
+
+void TaskManagerNode::log_unlock_rejected(
+  const std::optional<int> & command_task_id,
+  const std::string & reason) const
+{
+  RCLCPP_WARN(get_logger(),
+    "UNLOCK rejected: reason=%s state=%s lock_open=%s active_task_id=%s "
+    "payload_task_id=%s pending_destination_after_lock=%s pending_finish_after_lock=%s "
+    "waiting_patient_finish=%s unlock_phase=%s navigation_in_progress=%s",
+    reason.c_str(),
+    state_to_string(state_).c_str(),
+    lock_open_ ? "true" : "false",
+    active_task_ ? std::to_string(active_task_->task_id).c_str() : "none",
+    command_task_id ? std::to_string(*command_task_id).c_str() : "null",
+    pending_destination_after_lock_ ? "true" : "false",
+    pending_finish_after_lock_ ? "true" : "false",
+    waiting_patient_finish_ ? "true" : "false",
+    unlock_phase_.empty() ? "none" : unlock_phase_.c_str(),
+    navigation_in_progress_ ? "true" : "false");
 }
 
 bool TaskManagerNode::is_battery_low_task() const

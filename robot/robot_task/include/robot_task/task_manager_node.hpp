@@ -148,6 +148,9 @@ private:
   void clear_navigation_context();
   void reset_to_idle();
   bool can_accept_unlock_command() const;
+  void log_unlock_rejected(
+    const std::optional<int> & command_task_id,
+    const std::string & reason) const;
   bool is_patient_task() const;
   bool is_battery_low_task() const;
   bool requires_task_finish(const ActiveTask & task) const;
