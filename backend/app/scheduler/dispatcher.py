@@ -13,6 +13,8 @@ Priority rules (lower number = higher priority):
 """
 import logging
 
+from sqlalchemy.orm import Session
+
 from app.constants.enums import TaskStatus, BLOCKING_ROBOT_STATES
 from app.constants import mqtt_topics
 from app.models.task import Task
