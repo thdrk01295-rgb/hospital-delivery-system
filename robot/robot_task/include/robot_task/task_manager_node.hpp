@@ -100,6 +100,8 @@ private:
   std::string               unlock_phase_;
   bool                      navigation_in_progress_{false};
   bool                      waiting_patient_finish_{false};
+  bool                      lock_open_{false};
+  bool                      pending_finish_after_lock_{false};
 
   // ── Callbacks ───────────────────────────────────────────
   void on_task_assign(const std_msgs::msg::String::SharedPtr msg);
@@ -136,6 +138,8 @@ private:
   void enter_error(const std::string & message);
   void enter_emergency();
   void handle_lock_opened();
+  void handle_lock_locked();
+  void close_lock_before_finish();
   void clear_task_context();
   void clear_navigation_context();
   void reset_to_idle();

@@ -316,8 +316,12 @@ void TaskManagerNode::on_task_finish(const std_msgs::msg::String::SharedPtr msg)
   }
 
   RCLCPP_INFO(get_logger(),
-    "task_finish accepted — task_id=%d type=%s resetting to IDLE",
+    "task_finish accepted — task_id=%d type=%s",
     active_task_->task_id, active_task_->task_type.c_str());
+  if (lock_open_) {
+    close_lock_before_finish();
+    return;
+  }
   waiting_patient_finish_ = false;
   reset_to_idle();
 }
@@ -407,6 +411,7 @@ void TaskManagerNode::on_lock_command(const std_msgs::msg::String::SharedPtr msg
     handle_lock_opened();
   } else {
     publish_lock_status(command, "LOCKED");
+    handle_lock_locked();
   }
 }
 
@@ -464,6 +469,8 @@ void TaskManagerNode::on_lock_status_feedback(const std_msgs::msg::String::Share
 
   if (command == "UNLOCK" && status == "OPENED") {
     handle_lock_opened();
+  } else if (command == "LOCK" && status == "LOCKED") {
+    handle_lock_locked();
   } else if (status == "FAILED") {
     RCLCPP_WARN(get_logger(), "Lock command failed: command=%s", command.c_str());
   }
@@ -1084,15 +1091,55 @@ void TaskManagerNode::handle_lock_opened()
   }
 
   if (unlock_phase_ == "ORIGIN") {
+    lock_open_ = true;
     transition_to(TaskState::LOADING);
     return;
   }
   if (unlock_phase_ == "DESTINATION") {
+    lock_open_ = true;
     transition_to(TaskState::UNLOADING);
     return;
   }
 
   RCLCPP_WARN(get_logger(), "lock OPENED received with unknown unlock phase — ignored");
+}
+
+void TaskManagerNode::handle_lock_locked()
+{
+  lock_open_ = false;
+  if (!pending_finish_after_lock_) {
+    return;
+  }
+
+  RCLCPP_INFO(get_logger(),
+    "Lock closed after task_finish — task_id=%d resetting to IDLE",
+    active_task_ ? active_task_->task_id : 0);
+  pending_finish_after_lock_ = false;
+  waiting_patient_finish_ = false;
+  reset_to_idle();
+}
+
+void TaskManagerNode::close_lock_before_finish()
+{
+  if (pending_finish_after_lock_) {
+    RCLCPP_WARN(get_logger(),
+      "task_finish already pending lock close — waiting for LOCKED feedback");
+    return;
+  }
+
+  pending_finish_after_lock_ = true;
+  RCLCPP_INFO(get_logger(),
+    "Lock is open at task_finish — closing before IDLE");
+  publish_lock_status("LOCK", "ACCEPTED");
+
+  if (!lock_mock_enabled_) {
+    RCLCPP_INFO(get_logger(),
+      "lock_mock_enabled=false; waiting for external LOCKED feedback before IDLE");
+    return;
+  }
+
+  publish_lock_status("LOCK", "LOCKED");
+  handle_lock_locked();
 }
 
 void TaskManagerNode::clear_task_context()
@@ -1109,6 +1156,8 @@ void TaskManagerNode::clear_task_context()
   clear_navigation_context();
   unlock_phase_.clear();
   waiting_patient_finish_ = false;
+  pending_finish_after_lock_ = false;
+  lock_open_ = false;
   active_task_.reset();
 }
 
