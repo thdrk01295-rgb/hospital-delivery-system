@@ -102,6 +102,7 @@ private:
   bool                      waiting_patient_finish_{false};
   bool                      lock_open_{false};
   bool                      pending_finish_after_lock_{false};
+  bool                      pending_destination_after_lock_{false};
 
   // ── Callbacks ───────────────────────────────────────────
   void on_task_assign(const std_msgs::msg::String::SharedPtr msg);
@@ -122,7 +123,7 @@ private:
 
   // ── Helpers ─────────────────────────────────────────────
   void transition_to(TaskState next);
-  void send_nav_goal(const std::string & code, const std::string & phase);
+  bool send_nav_goal(const std::string & code, const std::string & phase);
   void publish_nav_cancel(std::optional<int> task_id);
   void publish_stop_command();
   void start_navigation_timeout();

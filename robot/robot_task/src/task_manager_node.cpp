@@ -398,6 +398,12 @@ void TaskManagerNode::on_lock_command(const std_msgs::msg::String::SharedPtr msg
     }
   }
 
+  if (command == "LOCK" && !active_task_) {
+    RCLCPP_WARN(get_logger(), "LOCK received without active task — rejected");
+    publish_lock_status(command, "FAILED", "no active task");
+    return;
+  }
+
   publish_lock_status(command, "ACCEPTED");
   if (!lock_mock_enabled_) {
     RCLCPP_INFO(get_logger(),
@@ -653,6 +659,11 @@ void TaskManagerNode::on_nfc_trigger(const std_msgs::msg::String::SharedPtr msg)
     state_to_string(state_).c_str());
 
   if (state_ == TaskState::LOADING) {
+    if (pending_destination_after_lock_ || lock_open_) {
+      RCLCPP_WARN(get_logger(),
+        "NFC trigger ignored while lock is open; waiting for LOCKED before destination move");
+      return;
+    }
     transition_to(TaskState::MOVING_TO_DESTINATION);
   } else if (state_ == TaskState::UNLOADING) {
     if (is_patient_task()) {
@@ -680,6 +691,11 @@ void TaskManagerNode::on_loading_timer()
   }
   if (state_ != TaskState::LOADING || !active_task_) {
     RCLCPP_WARN(get_logger(), "Loading timer fired outside LOADING — ignored");
+    return;
+  }
+  if (pending_destination_after_lock_ || lock_open_) {
+    RCLCPP_WARN(get_logger(),
+      "Loading timer ignored while lock is open; waiting for LOCKED before destination move");
     return;
   }
   RCLCPP_INFO(get_logger(), "Loading timer expired — moving to destination");
@@ -755,6 +771,15 @@ void TaskManagerNode::transition_to(TaskState next)
     return;
   }
 
+  if ((next == TaskState::MOVING_TO_ORIGIN ||
+    next == TaskState::MOVING_TO_DESTINATION) && lock_open_)
+  {
+    RCLCPP_ERROR(get_logger(),
+      "Blocked transition to %s while lock is open",
+      state_to_string(next).c_str());
+    return;
+  }
+
   RCLCPP_INFO(get_logger(), "State: %s → %s",
     state_to_string(state_).c_str(), state_to_string(next).c_str());
 
@@ -775,8 +800,9 @@ void TaskManagerNode::transition_to(TaskState next)
       break;
 
     case TaskState::MOVING_TO_ORIGIN:
-      send_nav_goal(active_task_->origin, "ORIGIN");
-      if (state_ == TaskState::MOVING_TO_ORIGIN) {
+      if (send_nav_goal(active_task_->origin, "ORIGIN") &&
+        state_ == TaskState::MOVING_TO_ORIGIN)
+      {
         start_navigation_timeout();
       }
       break;
@@ -793,19 +819,30 @@ void TaskManagerNode::transition_to(TaskState next)
 
     case TaskState::LOADING:
 #ifndef USE_NFC_TRIGGER
-      RCLCPP_INFO(get_logger(),
-        "DELIVERY_OPEN_NUR — starting loading timer (%.1fs)", LOADING_TIMER_SEC);
-      loading_timer_ = create_wall_timer(
-        std::chrono::duration<double>(LOADING_TIMER_SEC),
-        std::bind(&TaskManagerNode::on_loading_timer, this));
+      if (pending_destination_after_lock_) {
+        RCLCPP_INFO(get_logger(),
+          "DELIVERY_OPEN_NUR — waiting for LOCKED before destination move");
+      } else {
+        RCLCPP_INFO(get_logger(),
+          "DELIVERY_OPEN_NUR — starting loading timer (%.1fs)", LOADING_TIMER_SEC);
+        loading_timer_ = create_wall_timer(
+          std::chrono::duration<double>(LOADING_TIMER_SEC),
+          std::bind(&TaskManagerNode::on_loading_timer, this));
+      }
 #else
-      RCLCPP_INFO(get_logger(), "DELIVERY_OPEN_NUR — waiting for NFC trigger");
+      if (pending_destination_after_lock_) {
+        RCLCPP_INFO(get_logger(),
+          "DELIVERY_OPEN_NUR — waiting for LOCKED before destination move");
+      } else {
+        RCLCPP_INFO(get_logger(), "DELIVERY_OPEN_NUR — waiting for NFC trigger");
+      }
 #endif
       break;
 
     case TaskState::MOVING_TO_DESTINATION:
-      send_nav_goal(active_task_->destination, "DESTINATION");
-      if (state_ == TaskState::MOVING_TO_DESTINATION) {
+      if (send_nav_goal(active_task_->destination, "DESTINATION") &&
+        state_ == TaskState::MOVING_TO_DESTINATION)
+      {
         start_navigation_timeout();
       }
       break;
@@ -885,14 +922,21 @@ void TaskManagerNode::transition_to(TaskState next)
 // Publish helpers
 // ============================================================
 
-void TaskManagerNode::send_nav_goal(const std::string & code, const std::string & phase)
+bool TaskManagerNode::send_nav_goal(const std::string & code, const std::string & phase)
 {
+  if (lock_open_) {
+    RCLCPP_ERROR(get_logger(),
+      "send_nav_goal blocked while lock is open: phase=%s code=%s",
+      phase.c_str(), code.c_str());
+    return false;
+  }
+
   auto pose = location_mapper_.resolve(code);
   if (!pose) {
     // Should not happen — validated at task_assign time
     RCLCPP_ERROR(get_logger(), "send_nav_goal: cannot resolve '%s'", code.c_str());
     enter_error("cannot resolve location: " + code);
-    return;
+    return false;
   }
 
   json j;
@@ -913,6 +957,7 @@ void TaskManagerNode::send_nav_goal(const std::string & code, const std::string 
   RCLCPP_INFO(get_logger(),
     "Nav goal sent: code='%s' x=%.2f y=%.2f yaw=%.2f",
     code.c_str(), pose->x, pose->y, pose->yaw);
+  return true;
 }
 
 void TaskManagerNode::publish_nav_cancel(std::optional<int> task_id)
@@ -1092,6 +1137,7 @@ void TaskManagerNode::handle_lock_opened()
 
   if (unlock_phase_ == "ORIGIN") {
     lock_open_ = true;
+    pending_destination_after_lock_ = true;
     transition_to(TaskState::LOADING);
     return;
   }
@@ -1107,16 +1153,39 @@ void TaskManagerNode::handle_lock_opened()
 void TaskManagerNode::handle_lock_locked()
 {
   lock_open_ = false;
-  if (!pending_finish_after_lock_) {
+  if (pending_finish_after_lock_) {
+    RCLCPP_INFO(get_logger(),
+      "Lock closed after task_finish — task_id=%d resetting to IDLE",
+      active_task_ ? active_task_->task_id : 0);
+    pending_finish_after_lock_ = false;
+    pending_destination_after_lock_ = false;
+    waiting_patient_finish_ = false;
+    reset_to_idle();
     return;
   }
 
-  RCLCPP_INFO(get_logger(),
-    "Lock closed after task_finish — task_id=%d resetting to IDLE",
-    active_task_ ? active_task_->task_id : 0);
-  pending_finish_after_lock_ = false;
-  waiting_patient_finish_ = false;
-  reset_to_idle();
+  if (pending_destination_after_lock_) {
+    pending_destination_after_lock_ = false;
+    if (!active_task_) {
+      RCLCPP_WARN(get_logger(), "LOCKED received for destination move without active task — ignored");
+      return;
+    }
+    if (state_ != TaskState::LOADING || unlock_phase_ != "ORIGIN") {
+      RCLCPP_WARN(get_logger(),
+        "LOCKED received for destination move while state=%s phase=%s — ignored",
+        state_to_string(state_).c_str(), unlock_phase_.c_str());
+      return;
+    }
+    if (loading_timer_) {
+      loading_timer_->cancel();
+      loading_timer_.reset();
+    }
+    RCLCPP_INFO(get_logger(),
+      "Origin lock closed — moving to destination");
+    unlock_phase_.clear();
+    transition_to(TaskState::MOVING_TO_DESTINATION);
+    return;
+  }
 }
 
 void TaskManagerNode::close_lock_before_finish()
@@ -1157,6 +1226,7 @@ void TaskManagerNode::clear_task_context()
   unlock_phase_.clear();
   waiting_patient_finish_ = false;
   pending_finish_after_lock_ = false;
+  pending_destination_after_lock_ = false;
   lock_open_ = false;
   active_task_.reset();
 }
