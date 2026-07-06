@@ -466,12 +466,59 @@ def _handle_robot_error(raw: dict) -> None:
         db.close()
 
 
+def _resolve_active_task_id(robot_code: str) -> int | None:
+    """
+    When robot/lock_status arrives with task_id=null, resolve the single active task
+    (DISPATCHED or IN_PROGRESS) assigned to this robot.
+    Returns task_id if exactly one is found; None if zero (debug log) or multiple (warning).
+    """
+    from app.db.session import SessionLocal
+    from app.models.robot import Robot as RobotModel
+    from app.models.task import Task
+
+    db = SessionLocal()
+    try:
+        robot = db.query(RobotModel).filter(RobotModel.robot_code == robot_code).first()
+        if not robot:
+            logger.warning(
+                f"[lock_phase] Cannot resolve active task — robot '{robot_code}' not found in DB"
+            )
+            return None
+        active_tasks = (
+            db.query(Task)
+            .filter(
+                Task.assigned_robot_id == robot.id,
+                Task.status.in_([TaskStatus.DISPATCHED, TaskStatus.IN_PROGRESS]),
+            )
+            .all()
+        )
+        if len(active_tasks) == 1:
+            return active_tasks[0].id
+        elif not active_tasks:
+            logger.debug(
+                f"[lock_phase] task_id=null for robot={robot_code} — no active task found, "
+                f"skipping phase update"
+            )
+            return None
+        else:
+            logger.warning(
+                f"[lock_phase] task_id=null for robot={robot_code} — {len(active_tasks)} active tasks "
+                f"(ids={[t.id for t in active_tasks]}), ambiguous, skipping phase update"
+            )
+            return None
+    finally:
+        db.close()
+
+
 def _handle_lock_status(raw: dict) -> None:
     """
-    Handles robot/lock_status (v4).
+    Handles robot/lock_status (v4+null-task_id compat).
     Tracks lock phase per task for the Lock Completion Guard.
     Broadcasts lock_status_update with lock_phase for the tablet UI.
     Cancels the WAIT_UNLOCK timeout only when command=UNLOCK and status=OPENED.
+
+    When the robot firmware sends task_id=null, the active task is resolved from DB
+    so that lock phase tracking and timeout cancellation still work correctly.
     """
     from app.websocket.manager import ws_manager
 
@@ -481,28 +528,40 @@ def _handle_lock_status(raw: dict) -> None:
         f"command={data.command} status={data.status}"
     )
 
+    # Resolve effective_task_id: use the provided task_id if present; otherwise
+    # fall back to the single active task for this robot so that firmware sending
+    # task_id=null still updates the backend lock phase correctly.
+    effective_task_id = data.task_id
+    if effective_task_id is None:
+        effective_task_id = _resolve_active_task_id(data.robot_id)
+        if effective_task_id is not None:
+            logger.info(
+                f"[lock_phase] task_id was null — resolved effective_task_id={effective_task_id} "
+                f"from active task for robot={data.robot_id}"
+            )
+
     # v4: Update lock phase — OPENED on UNLOCK+OPENED, RELOCKED on LOCK+LOCKED only after OPENED.
-    if data.task_id is not None:
+    if effective_task_id is not None:
         if data.command == "UNLOCK" and data.status == "OPENED":
-            set_task_lock_phase(data.task_id, "OPENED")
-            logger.info(f"[lock_phase] task_id={data.task_id} → OPENED")
+            set_task_lock_phase(effective_task_id, "OPENED")
+            logger.info(f"[lock_phase] task_id={effective_task_id} → OPENED")
         elif data.command == "LOCK" and data.status == "LOCKED":
-            if get_task_lock_phase(data.task_id) == "OPENED":
-                set_task_lock_phase(data.task_id, "RELOCKED")
-                logger.info(f"[lock_phase] task_id={data.task_id} → RELOCKED")
+            if get_task_lock_phase(effective_task_id) == "OPENED":
+                set_task_lock_phase(effective_task_id, "RELOCKED")
+                logger.info(f"[lock_phase] task_id={effective_task_id} → RELOCKED")
             else:
                 logger.debug(
-                    f"[lock_phase] LOCK+LOCKED for task_id={data.task_id} without prior OPENED "
-                    f"(phase={get_task_lock_phase(data.task_id)}) — not advancing to RELOCKED"
+                    f"[lock_phase] LOCK+LOCKED for task_id={effective_task_id} without prior OPENED "
+                    f"(phase={get_task_lock_phase(effective_task_id)}) — not advancing to RELOCKED"
                 )
 
-    lock_phase = get_task_lock_phase(data.task_id) if data.task_id is not None else None
+    lock_phase = get_task_lock_phase(effective_task_id) if effective_task_id is not None else None
 
     _schedule(ws_manager.broadcast(
         ws_events.LOCK_STATUS_UPDATE,
         {
             "robot_id": data.robot_id,
-            "task_id": data.task_id,
+            "task_id": effective_task_id,  # resolved id so frontend and backend agree
             "command": data.command,
             "status": data.status,
             "message": data.message,
@@ -511,14 +570,14 @@ def _handle_lock_status(raw: dict) -> None:
     ))
 
     # Only command=UNLOCK + status=OPENED means the compartment was successfully unlocked.
-    # ACCEPTED = command acknowledged, LOCKED = locked/LOCK completed, FAILED = failure.
+    # ACCEPTED = command acknowledged, LOCKED = lock completed, FAILED = failure.
     # None of those cancel the timeout — only a confirmed open does.
-    if data.command == "UNLOCK" and data.status == "OPENED" and data.task_id is not None:
+    if data.command == "UNLOCK" and data.status == "OPENED" and effective_task_id is not None:
         logger.info(
-            f"[lock_status] UNLOCK+OPENED confirmed for task_id={data.task_id} "
+            f"[lock_status] UNLOCK+OPENED confirmed for task_id={effective_task_id} "
             f"— cancelling WAIT_UNLOCK timeout"
         )
-        _cancel_wait_unlock_timeout(data.task_id)
+        _cancel_wait_unlock_timeout(effective_task_id)
 
 
 def _handle_task_complete(raw: dict) -> None:
