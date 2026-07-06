@@ -7,6 +7,7 @@ from app.db.session import get_db
 from app.schemas.robot import RobotStatusRead
 from app.services.robot_service import get_or_create_robot, get_robot_status_dict
 from app.services.task_lock_phase_store import get_task_lock_phase, clear_task_lock_phase
+from app.services.task_route_stage_store import get_current_stop, set_current_stop, clear_current_stop
 from app.constants import mqtt_topics
 from app.constants.enums import RobotState, TaskStatus
 
@@ -181,16 +182,59 @@ async def complete_task_from_tablet(
             detail="잠금버튼을 눌러주세요",
         )
 
-    task = update_task_status(db, active_task.id, TaskStatus.COMPLETE)
-    task_dict = TaskRead.model_validate(task).model_dump(mode="json")
-    await ws_manager.broadcast(ws_events.TASK_STATUS_UPDATE, task_dict)
+    current_stop = get_current_stop(active_task.id)
 
-    publish(mqtt_topics.SERVER_TASK_FINISH, {
-        "robot_id": body.robot_id,
-        "task_id": active_task.id,
-        "source": "tablet_ui",
-    })
+    if current_stop == "origin":
+        # ── Origin stop complete ───────────────────────────────────────────────
+        # Interaction at origin is done; robot must move to destination.
+        # Task remains IN_PROGRESS — do NOT mark COMPLETE here.
+        clear_task_lock_phase(active_task.id)   # reset lock phase for the destination stop
+        set_current_stop(active_task.id, "destination")
 
-    clear_task_lock_phase(active_task.id)
+        publish(mqtt_topics.SERVER_TASK_FINISH, {
+            "robot_id": body.robot_id,
+            "task_id": active_task.id,
+            "source": "tablet_ui",
+            "stop_type": "origin",
+            "is_final": False,
+            "next_action": "MOVE_TO_DESTINATION",
+        })
 
-    return {"status": "completed", "task_id": active_task.id}
+        await ws_manager.broadcast(ws_events.TASK_ROUTE_STAGE_UPDATE, {
+            "task_id": active_task.id,
+            "current_stop": "destination",
+        })
+
+        return {
+            "status": "origin_complete",
+            "task_id": active_task.id,
+            "stop_type": "origin",
+            "is_final": False,
+            "next_action": "MOVE_TO_DESTINATION",
+        }
+
+    else:
+        # ── Destination stop complete (final) ─────────────────────────────────
+        task = update_task_status(db, active_task.id, TaskStatus.COMPLETE)
+        task_dict = TaskRead.model_validate(task).model_dump(mode="json")
+        await ws_manager.broadcast(ws_events.TASK_STATUS_UPDATE, task_dict)
+
+        publish(mqtt_topics.SERVER_TASK_FINISH, {
+            "robot_id": body.robot_id,
+            "task_id": active_task.id,
+            "source": "tablet_ui",
+            "stop_type": "destination",
+            "is_final": True,
+            "next_action": "FINISH_TASK",
+        })
+
+        clear_task_lock_phase(active_task.id)
+        clear_current_stop(active_task.id)
+
+        return {
+            "status": "completed",
+            "task_id": active_task.id,
+            "stop_type": "destination",
+            "is_final": True,
+            "next_action": "FINISH_TASK",
+        }

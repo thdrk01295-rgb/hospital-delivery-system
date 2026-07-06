@@ -4,11 +4,14 @@
  * No auth required. The tablet is robot-context based: it knows only
  * the robotId from the URL and all actions are gated on robot state.
  *
- * v5 Lock phase toggle model:
+ * v6 Route-stage model:
+ *   currentStop="origin"      → Complete at this stop sends MOVE_TO_DESTINATION, keeps task active
+ *   currentStop="destination" → Complete sends FINISH_TASK, marks task COMPLETE
+ *
  *   taskLockPhase null/WAITING_UNLOCK → toggle="잠금해제", complete disabled
  *   taskLockPhase OPENED              → toggle="잠금", complete disabled, red hint
  *   taskLockPhase RELOCKED            → toggle="잠금해제", complete enabled
- *   Cycles (OPENED↔RELOCKED) repeat until the user explicitly presses Complete.
+ *   Cycles (OPENED↔RELOCKED) repeat freely within each stop.
  *   LOW_BATTERY/ERROR/EMERG → Warning screen, no action
  *   All other states        → State display only
  *
@@ -19,7 +22,7 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import { useParams }                    from 'react-router-dom'
-import { fetchRobotStatus, sendLockCommand, completeRobotTask } from '@/api/robot'
+import { fetchRobotStatus, sendLockCommand, completeRobotTask, type CompleteTaskResult } from '@/api/robot'
 import { fetchOngoingTasks }            from '@/api/tasks'
 import { ROBOT_STATE_LABELS, ROBOT_STATE_STYLE } from '@/constants/robotStateLabels'
 import type { RobotState, RobotStatus, Task, WsMessage, WsLockStatusUpdate } from '@/types'
@@ -63,6 +66,7 @@ export function TabletPage() {
   const [robot,             setRobot]             = useState<RobotStatus | null>(null)
   const [activeTask,        setActiveTask]         = useState<Task | null>(null)
   const [taskLockPhase,     setTaskLockPhase]      = useState<TaskLockPhase | null>(null)
+  const [currentStop,       setCurrentStop]        = useState<'origin' | 'destination'>('origin')
   const [lockActionPending, setLockActionPending]  = useState(false)
   const [actionError,       setActionError]        = useState<string | null>(null)
   const [now,               setNow]               = useState<Date>(new Date())
@@ -126,8 +130,18 @@ export function TabletPage() {
             case 'task_status_update': {
               const t = msg.data as Task
               if (t.assigned_robot_id === robotDbIdRef.current) {
-                setActiveTask(ACTIVE_STATUSES.has(t.status) ? t : null)
+                const isActive = ACTIVE_STATUSES.has(t.status)
+                setActiveTask(isActive ? t : null)
+                if (!isActive) {
+                  setCurrentStop('origin')  // reset for the next task
+                }
               }
+              break
+            }
+
+            case 'task_route_stage_update': {
+              const d = msg.data as { task_id: number; current_stop: 'origin' | 'destination' }
+              setCurrentStop(d.current_stop)
               break
             }
 
@@ -190,7 +204,16 @@ export function TabletPage() {
     setActionError(null)
     setLockActionPending(true)
     try {
-      await completeRobotTask(robotId)
+      const result: CompleteTaskResult = await completeRobotTask(robotId)
+      if (!result.is_final) {
+        // Origin stop done — reset for the destination stop immediately.
+        // The robot will arrive at destination and send WAIT_UNLOCK, which also
+        // resets taskLockPhase to WAITING_UNLOCK via the robot_state_update handler.
+        setTaskLockPhase(null)
+        setCurrentStop('destination')
+        setLockActionPending(false)
+      }
+      // is_final=true: task_status_update WS event will clear activeTask naturally.
     } catch (err: unknown) {
       setActionError(err instanceof Error ? err.message : '작업 완료 처리 실패')
       setLockActionPending(false)
@@ -259,7 +282,10 @@ export function TabletPage() {
           borderBottom: '1px solid rgba(255,255,255,0.07)',
         }}>
           <p style={{ margin: '0 0 3px', fontSize: '0.78rem', color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-            현재 작업
+            현재 작업 &nbsp;
+            <span style={{ color: currentStop === 'origin' ? '#e67e22' : '#2ecc71' }}>
+              [{currentStop === 'origin' ? '출발지' : '목적지'}]
+            </span>
           </p>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <span style={{ fontSize: '1rem', fontWeight: 600 }}>

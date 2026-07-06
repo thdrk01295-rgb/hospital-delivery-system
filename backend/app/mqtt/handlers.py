@@ -22,6 +22,7 @@ from app.services.task_lock_phase_store import (
     set_task_lock_phase,
     clear_task_lock_phase,
 )
+from app.services.task_route_stage_store import clear_current_stop
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +92,7 @@ async def _run_wait_unlock_timeout(task_id: int, robot_code: str) -> None:
 
     _wait_unlock_tasks.pop(task_id, None)
     clear_task_lock_phase(task_id)  # defensive: no entry should exist here, but clear to be safe
+    clear_current_stop(task_id)
     logger.warning(
         f"[WAIT_UNLOCK] Timeout expired ({timeout}s) for task_id={task_id}, "
         f"robot={robot_code} — marking task FAILED"
@@ -349,8 +351,9 @@ def _handle_low_battery(db, robot) -> None:
         logger.info(f"[LOW BATTERY] Task {active_task.id} requeued to PENDING")
         task_dict = TaskRead.model_validate(active_task).model_dump(mode="json")
         _schedule(ws_manager.broadcast(ws_events.TASK_STATUS_UPDATE, task_dict))
-        # v4: clear any stale lock phase so the re-dispatched task must earn RELOCKED again
+        # v4: clear stale lock phase and route stage so the re-dispatched task starts fresh
         clear_task_lock_phase(active_task.id)
+        clear_current_stop(active_task.id)
     else:
         logger.info(
             f"[LOW BATTERY] No active task on robot {robot.robot_code} — skipping server/task_cancel"
@@ -602,6 +605,7 @@ def _handle_task_complete(raw: dict) -> None:
             return
 
         clear_task_lock_phase(data.task_id)
+        clear_current_stop(data.task_id)
         task_dict = TaskRead.model_validate(task).model_dump(mode="json")
         _schedule(ws_manager.broadcast(ws_events.TASK_STATUS_UPDATE, task_dict))
 

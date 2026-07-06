@@ -19,6 +19,7 @@ from app.services.task_service import (
 from app.services.abnormal_event_service import open_event, resolve_all_by_type
 from app.services.auth_service import decode_token
 from app.services.task_lock_phase_store import clear_task_lock_phase
+from app.services.task_route_stage_store import clear_current_stop
 from app.constants.enums import TaskType, TaskStatus
 from app.constants import ws_events, mqtt_topics
 from app.websocket.manager import ws_manager
@@ -99,6 +100,7 @@ async def nurse_cancel_task(
     task_dict = TaskRead.model_validate(task).model_dump(mode="json")
     await ws_manager.broadcast(ws_events.TASK_STATUS_UPDATE, task_dict)
     clear_task_lock_phase(task_id)
+    clear_current_stop(task_id)
     return task
 
 
@@ -124,7 +126,8 @@ async def trigger_emergency(
     )
     if active_task:
         active_task = requeue_task(db, active_task.id)
-        clear_task_lock_phase(active_task.id)  # stale RELOCKED must not survive re-dispatch
+        clear_task_lock_phase(active_task.id)   # stale RELOCKED must not survive re-dispatch
+        clear_current_stop(active_task.id)      # route stage resets when task is requeued
         requeued_dict = TaskRead.model_validate(active_task).model_dump(mode="json")
         await ws_manager.broadcast(ws_events.TASK_STATUS_UPDATE, requeued_dict)
 
@@ -300,6 +303,7 @@ async def patient_cancel_task(
     task_dict = TaskRead.model_validate(task).model_dump(mode="json")
     await ws_manager.broadcast(ws_events.TASK_STATUS_UPDATE, task_dict)
     clear_task_lock_phase(task.id)
+    clear_current_stop(task.id)
     return task
 
 

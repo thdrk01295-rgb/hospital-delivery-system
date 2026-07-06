@@ -13,9 +13,15 @@ export function sendLockCommand(robotId: string, command: 'UNLOCK' | 'LOCK') {
   })
 }
 
-/** Tablet UI: POST /robot/complete-task — marks active task COMPLETE and publishes server/task_finish. */
+export interface CompleteTaskResult {
+  status: string
+  task_id: number
+  stop_type: 'origin' | 'destination'
+  is_final: boolean
+  next_action: 'MOVE_TO_DESTINATION' | 'FINISH_TASK'
+}
+
+/** Tablet UI: POST /robot/complete-task — origin-stop or destination-stop completion. */
 export function completeRobotTask(robotId: string) {
-  return api.post<{ status: string; task_id: number }>('/robot/complete-task', {
-    robot_id: robotId,
-  })
+  return api.post<CompleteTaskResult>('/robot/complete-task', { robot_id: robotId })
 }

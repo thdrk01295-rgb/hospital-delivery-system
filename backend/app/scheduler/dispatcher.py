@@ -19,6 +19,7 @@ from app.constants.enums import TaskStatus, BLOCKING_ROBOT_STATES
 from app.constants import mqtt_topics
 from app.models.task import Task
 from app.models.robot import Robot
+from app.services.task_route_stage_store import set_current_stop
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +82,10 @@ async def maybe_dispatch() -> None:
         task.status = TaskStatus.DISPATCHED
         task.assigned_robot_id = robot.id
         db.commit()
+
+        # Tasks with an origin stop visit origin first; tasks without go straight to destination.
+        initial_stop = "origin" if task.origin_location_id else "destination"
+        set_current_stop(task.id, initial_stop)
 
         _publish_task_assignment(robot, task)
         await _broadcast_task_update(task)
