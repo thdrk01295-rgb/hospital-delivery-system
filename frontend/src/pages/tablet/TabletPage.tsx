@@ -133,9 +133,21 @@ export function TabletPage() {
             case 'lock_status_update': {
               const d = msg.data as WsLockStatusUpdate
               if (d.robot_id !== robotId) break
+
               if (d.lock_phase === 'OPENED' || d.lock_phase === 'RELOCKED') {
+                // Primary path: use the authoritative phase from the server
                 setTaskLockPhase(d.lock_phase)
+              } else {
+                // Defensive fallback: derive from raw command+status when lock_phase is null
+                // (handles robot firmware that sends lock_status without task_id)
+                if (d.command === 'UNLOCK' && d.status === 'OPENED') {
+                  setTaskLockPhase('OPENED')
+                } else if (d.command === 'LOCK' && d.status === 'LOCKED') {
+                  // Mirror the backend guard: only advance if phase was OPENED
+                  setTaskLockPhase((prev) => (prev === 'OPENED' ? 'RELOCKED' : prev))
+                }
               }
+
               if (d.status === 'FAILED') {
                 setActionError('잠금 처리 실패. 다시 시도해주세요.')
               }
@@ -203,7 +215,7 @@ export function TabletPage() {
   const isWaiting  = state === 'WAIT_UNLOCK'
 
   const needsLock  = isOpen && taskLockPhase === 'OPENED'
-  const canComplete = isOpen && taskLockPhase === 'RELOCKED'
+  const canComplete = taskLockPhase === 'RELOCKED'
 
   // ── Render ────────────────────────────────────────────────────────────────
 
