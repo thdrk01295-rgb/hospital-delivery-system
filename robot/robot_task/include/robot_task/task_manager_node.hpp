@@ -147,6 +147,7 @@ private:
   void clear_task_context();
   void clear_navigation_context();
   void reset_to_idle();
+  bool can_accept_unlock_command() const;
   bool is_patient_task() const;
   bool is_battery_low_task() const;
   bool requires_task_finish(const ActiveTask & task) const;

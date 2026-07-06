@@ -441,10 +441,10 @@ void TaskManagerNode::on_lock_command(const std_msgs::msg::String::SharedPtr msg
       publish_lock_status(command, "FAILED", "no active task");
       return;
     }
-    if (state_ != TaskState::WAIT_UNLOCK) {
+    if (!can_accept_unlock_command()) {
       RCLCPP_WARN(get_logger(), "UNLOCK received while state is %s — rejected",
         state_to_string(state_).c_str());
-      publish_lock_status(command, "FAILED", "robot is not waiting for unlock");
+      publish_lock_status(command, "FAILED", "robot is not waiting for unlock at this stop");
       return;
     }
   }
@@ -1180,7 +1180,7 @@ void TaskManagerNode::handle_lock_opened()
     RCLCPP_WARN(get_logger(), "lock OPENED received without active task — ignored");
     return;
   }
-  if (state_ != TaskState::WAIT_UNLOCK) {
+  if (!can_accept_unlock_command()) {
     RCLCPP_DEBUG(get_logger(), "lock OPENED received while state is %s — ignored",
       state_to_string(state_).c_str());
     return;
@@ -1188,12 +1188,22 @@ void TaskManagerNode::handle_lock_opened()
 
   if (unlock_phase_ == "ORIGIN") {
     lock_open_ = true;
+    if (state_ != TaskState::WAIT_UNLOCK) {
+      RCLCPP_INFO(get_logger(),
+        "Origin lock reopened — waiting for LOCKED and server task_finish");
+      return;
+    }
     pending_destination_after_lock_ = true;
     transition_to(TaskState::LOADING);
     return;
   }
   if (unlock_phase_ == "DESTINATION") {
     lock_open_ = true;
+    if (state_ != TaskState::WAIT_UNLOCK) {
+      RCLCPP_INFO(get_logger(),
+        "Destination lock reopened — waiting for LOCKED and server task_finish");
+      return;
+    }
     transition_to(TaskState::UNLOADING);
     return;
   }
@@ -1335,6 +1345,34 @@ bool TaskManagerNode::is_patient_task() const
   return active_task_ &&
     (active_task_->task_type == "patient_clothes_rental" ||
     active_task_->task_type == "patient_clothes_return");
+}
+
+bool TaskManagerNode::can_accept_unlock_command() const
+{
+  if (!active_task_ || lock_open_) {
+    return false;
+  }
+  if (state_ == TaskState::EMERGENCY ||
+    state_ == TaskState::IDLE ||
+    state_ == TaskState::TASK_RECEIVED ||
+    state_ == TaskState::MOVING_TO_ORIGIN ||
+    state_ == TaskState::MOVING_TO_DESTINATION ||
+    navigation_in_progress_)
+  {
+    return false;
+  }
+  if (state_ == TaskState::WAIT_UNLOCK) {
+    return unlock_phase_ == "ORIGIN" || unlock_phase_ == "DESTINATION";
+  }
+  if (unlock_phase_ == "ORIGIN") {
+    return state_ == TaskState::AT_ORIGIN ||
+      (state_ == TaskState::LOADING && pending_destination_after_lock_);
+  }
+  if (unlock_phase_ == "DESTINATION") {
+    return state_ == TaskState::AT_DESTINATION ||
+      state_ == TaskState::UNLOADING;
+  }
+  return false;
 }
 
 bool TaskManagerNode::is_battery_low_task() const
