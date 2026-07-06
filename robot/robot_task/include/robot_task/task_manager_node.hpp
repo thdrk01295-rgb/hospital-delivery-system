@@ -141,6 +141,9 @@ private:
   void handle_lock_opened();
   void handle_lock_locked();
   void close_lock_before_finish();
+  void clear_interaction_context();
+  void move_to_destination_after_origin_finish();
+  void finish_task_from_server();
   void clear_task_context();
   void clear_navigation_context();
   void reset_to_idle();

@@ -280,22 +280,46 @@ void TaskManagerNode::on_task_finish(const std_msgs::msg::String::SharedPtr msg)
   std::lock_guard<std::recursive_mutex> lock(state_mutex_);
 
   int finish_task_id;
+  std::string stop_type;
+  bool is_final;
+  std::string next_action;
   try {
     json j = json::parse(msg->data);
-    if (j.contains("robot_id") && !j["robot_id"].is_null()) {
-      const auto incoming_robot_id = j["robot_id"].get<std::string>();
-      if (incoming_robot_id != robot_id_) {
-        RCLCPP_WARN(get_logger(),
-          "task_finish robot_id mismatch — got %s expected %s; ignored",
-          incoming_robot_id.c_str(), robot_id_.c_str());
-        return;
-      }
+    if (!j.contains("robot_id") || !j["robot_id"].is_string()) {
+      RCLCPP_WARN(get_logger(), "task_finish robot_id must be a string — ignored");
+      return;
+    }
+    const auto incoming_robot_id = j["robot_id"].get<std::string>();
+    if (incoming_robot_id != robot_id_) {
+      RCLCPP_WARN(get_logger(),
+        "task_finish robot_id mismatch — got %s expected %s; ignored",
+        incoming_robot_id.c_str(), robot_id_.c_str());
+      return;
     }
     if (!j.contains("task_id") || !j["task_id"].is_number_integer()) {
       RCLCPP_ERROR(get_logger(), "task_finish task_id must be an integer");
       return;
     }
     finish_task_id = j["task_id"].get<int>();
+    if (j.contains("source") && !j["source"].is_null() && !j["source"].is_string()) {
+      RCLCPP_WARN(get_logger(), "task_finish source must be a string when provided — ignored");
+      return;
+    }
+    if (!j.contains("stop_type") || !j["stop_type"].is_string()) {
+      RCLCPP_WARN(get_logger(), "task_finish stop_type must be a string — ignored");
+      return;
+    }
+    if (!j.contains("is_final") || !j["is_final"].is_boolean()) {
+      RCLCPP_WARN(get_logger(), "task_finish is_final must be a boolean — ignored");
+      return;
+    }
+    if (!j.contains("next_action") || !j["next_action"].is_string()) {
+      RCLCPP_WARN(get_logger(), "task_finish next_action must be a string — ignored");
+      return;
+    }
+    stop_type = j["stop_type"].get<std::string>();
+    is_final = j["is_final"].get<bool>();
+    next_action = j["next_action"].get<std::string>();
   } catch (const json::exception & e) {
     RCLCPP_ERROR(get_logger(), "task_finish JSON parse error: %s", e.what());
     return;
@@ -316,14 +340,41 @@ void TaskManagerNode::on_task_finish(const std_msgs::msg::String::SharedPtr msg)
   }
 
   RCLCPP_INFO(get_logger(),
-    "task_finish accepted — task_id=%d type=%s",
-    active_task_->task_id, active_task_->task_type.c_str());
-  if (lock_open_) {
-    close_lock_before_finish();
+    "task_finish accepted — task_id=%d type=%s stop_type=%s is_final=%s next_action=%s",
+    active_task_->task_id, active_task_->task_type.c_str(),
+    stop_type.c_str(), is_final ? "true" : "false", next_action.c_str());
+
+  if (stop_type != "origin" && stop_type != "destination") {
+    RCLCPP_WARN(get_logger(), "task_finish unknown stop_type=%s — ignored", stop_type.c_str());
     return;
   }
-  waiting_patient_finish_ = false;
-  reset_to_idle();
+  if (next_action != "MOVE_TO_DESTINATION" && next_action != "FINISH_TASK") {
+    RCLCPP_WARN(get_logger(), "task_finish unknown next_action=%s — ignored", next_action.c_str());
+    return;
+  }
+  if (!is_final && next_action == "FINISH_TASK") {
+    RCLCPP_WARN(get_logger(),
+      "task_finish invalid combination: is_final=false next_action=FINISH_TASK — ignored");
+    return;
+  }
+  if (is_final && next_action == "MOVE_TO_DESTINATION") {
+    RCLCPP_WARN(get_logger(),
+      "task_finish invalid combination: is_final=true next_action=MOVE_TO_DESTINATION — ignored");
+    return;
+  }
+
+  if (!is_final && stop_type == "origin" && next_action == "MOVE_TO_DESTINATION") {
+    move_to_destination_after_origin_finish();
+    return;
+  }
+  if (is_final && stop_type == "destination" && next_action == "FINISH_TASK") {
+    finish_task_from_server();
+    return;
+  }
+
+  RCLCPP_WARN(get_logger(),
+    "task_finish unsupported route-stage combination: stop_type=%s is_final=%s next_action=%s — ignored",
+    stop_type.c_str(), is_final ? "true" : "false", next_action.c_str());
 }
 
 // ────────────────────────────────────────────────────────────
@@ -1165,25 +1216,14 @@ void TaskManagerNode::handle_lock_locked()
   }
 
   if (pending_destination_after_lock_) {
-    pending_destination_after_lock_ = false;
-    if (!active_task_) {
-      RCLCPP_WARN(get_logger(), "LOCKED received for destination move without active task — ignored");
-      return;
-    }
     if (state_ != TaskState::LOADING || unlock_phase_ != "ORIGIN") {
       RCLCPP_WARN(get_logger(),
-        "LOCKED received for destination move while state=%s phase=%s — ignored",
+        "LOCKED received after origin open while state=%s phase=%s — ignored",
         state_to_string(state_).c_str(), unlock_phase_.c_str());
       return;
     }
-    if (loading_timer_) {
-      loading_timer_->cancel();
-      loading_timer_.reset();
-    }
     RCLCPP_INFO(get_logger(),
-      "Origin lock closed — moving to destination");
-    unlock_phase_.clear();
-    transition_to(TaskState::MOVING_TO_DESTINATION);
+      "Origin lock closed — waiting for server task_finish to move to destination");
     return;
   }
 }
@@ -1211,7 +1251,7 @@ void TaskManagerNode::close_lock_before_finish()
   handle_lock_locked();
 }
 
-void TaskManagerNode::clear_task_context()
+void TaskManagerNode::clear_interaction_context()
 {
   if (loading_timer_) {
     loading_timer_->cancel();
@@ -1228,6 +1268,57 @@ void TaskManagerNode::clear_task_context()
   pending_finish_after_lock_ = false;
   pending_destination_after_lock_ = false;
   lock_open_ = false;
+}
+
+void TaskManagerNode::move_to_destination_after_origin_finish()
+{
+  if (!active_task_) {
+    RCLCPP_WARN(get_logger(), "origin task_finish received without active task — ignored");
+    return;
+  }
+  if (active_task_->origin.empty()) {
+    RCLCPP_WARN(get_logger(),
+      "origin task_finish received for task without origin — ignored");
+    return;
+  }
+  if (lock_open_) {
+    RCLCPP_WARN(get_logger(),
+      "origin task_finish received while lock is open — destination move blocked");
+    return;
+  }
+  if (state_ != TaskState::LOADING || !pending_destination_after_lock_) {
+    RCLCPP_WARN(get_logger(),
+      "origin task_finish received while state=%s pending_destination_after_lock=%s — ignored",
+      state_to_string(state_).c_str(), pending_destination_after_lock_ ? "true" : "false");
+    return;
+  }
+  RCLCPP_INFO(get_logger(),
+    "origin task_finish accepted — keeping task active and moving to destination");
+  clear_interaction_context();
+  transition_to(TaskState::MOVING_TO_DESTINATION);
+}
+
+void TaskManagerNode::finish_task_from_server()
+{
+  if (!active_task_) {
+    RCLCPP_WARN(get_logger(), "destination task_finish received without active task — ignored");
+    return;
+  }
+
+  RCLCPP_INFO(get_logger(),
+    "destination task_finish accepted — task_id=%d resetting to IDLE",
+    active_task_->task_id);
+  if (is_patient_task()) {
+    RCLCPP_INFO(get_logger(),
+      "Patient task %d final finish — task_complete_event suppressed",
+      active_task_->task_id);
+  }
+  reset_to_idle();
+}
+
+void TaskManagerNode::clear_task_context()
+{
+  clear_interaction_context();
   active_task_.reset();
 }
 

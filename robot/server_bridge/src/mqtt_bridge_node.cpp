@@ -118,6 +118,39 @@ bool requireStringField(
   return true;
 }
 
+bool requireOptionalStringField(
+  const rclcpp::Logger & logger,
+  const std::string & source,
+  const json & payload,
+  const char * field)
+{
+  if (!payload.contains(field) || payload[field].is_null()) {
+    return true;
+  }
+  if (!payload[field].is_string()) {
+    RCLCPP_ERROR(logger, "%s payload %s must be a string", source.c_str(), field);
+    return false;
+  }
+  return true;
+}
+
+bool requireBooleanField(
+  const rclcpp::Logger & logger,
+  const std::string & source,
+  const json & payload,
+  const char * field)
+{
+  if (!payload.contains(field) || payload[field].is_null()) {
+    RCLCPP_ERROR(logger, "%s payload missing required %s", source.c_str(), field);
+    return false;
+  }
+  if (!payload[field].is_boolean()) {
+    RCLCPP_ERROR(logger, "%s payload %s must be a boolean", source.c_str(), field);
+    return false;
+  }
+  return true;
+}
+
 bool requireNullableStringField(
   const rclcpp::Logger & logger,
   const std::string & source,
@@ -176,6 +209,30 @@ bool matchesRobotId(
     return false;
   }
   return true;
+}
+
+bool validateTaskFinishPayload(
+  const rclcpp::Logger & logger,
+  const std::string & source,
+  const json & payload)
+{
+  if (!requireIntegerField(logger, source, payload, "task_id") ||
+    !requireOptionalStringField(logger, source, payload, "source"))
+  {
+    return false;
+  }
+
+  const bool has_v6_field =
+    payload.contains("stop_type") ||
+    payload.contains("is_final") ||
+    payload.contains("next_action");
+  if (!has_v6_field) {
+    return true;
+  }
+
+  return requireStringField(logger, source, payload, "stop_type") &&
+    requireBooleanField(logger, source, payload, "is_final") &&
+    requireStringField(logger, source, payload, "next_action");
 }
 
 }  // namespace
@@ -287,8 +344,12 @@ void MqttBridgeNode::onMqttMessage(const std::string & t, const std::string & pa
     {
       return;
     }
-  } else if (t == topic::TASK_CANCEL || t == topic::TASK_FINISH) {
+  } else if (t == topic::TASK_CANCEL) {
     if (!requireIntegerField(get_logger(), t, parsed, "task_id")) {
+      return;
+    }
+  } else if (t == topic::TASK_FINISH) {
+    if (!validateTaskFinishPayload(get_logger(), t, parsed)) {
       return;
     }
   } else if (t == topic::LOCK_COMMAND) {
