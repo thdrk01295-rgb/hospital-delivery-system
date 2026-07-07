@@ -14,6 +14,10 @@ export function triggerEmergency() {
   return api.post<Task>('/tasks/nurse/emergency')
 }
 
+export function releaseEmergency() {
+  return api.post<{ status: string }>('/tasks/nurse/emergency/release')
+}
+
 // Patient
 export function fetchPatientActiveTask() {
   return api.get<Task | null>('/tasks/patient/me')

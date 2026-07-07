@@ -5,6 +5,8 @@ export type RobotState =
   | 'MOVING'
   | 'ARRIVED'
   | 'WAIT_UNLOCK'
+  | 'AUTH_SUCCESS'
+  | 'AUTH_FAIL'
   | 'DELIVERY_OPEN_NUR'
   | 'DELIVERY_OPEN_PAT'
   | 'COMPLETE'
@@ -170,6 +172,7 @@ export type WsEventType =
   | 'inventory_update'
   | 'abnormal_event_update'
   | 'lock_status_update'
+  | 'task_route_stage_update'
 
 export interface WsMessage<T = unknown> {
   event: WsEventType

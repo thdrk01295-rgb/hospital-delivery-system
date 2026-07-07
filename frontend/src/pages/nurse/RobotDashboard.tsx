@@ -24,6 +24,8 @@ const STATE_DISPLAY: Record<RobotState, { text: string; bg: string; color: strin
   MOVING:            { text: '이동 중...',                                                bg: '#2980b9', color: '#fff'    },
   ARRIVED:           { text: '목적지에 도착했습니다',                                     bg: '#27ae60', color: '#fff'    },
   WAIT_UNLOCK:       { text: '잠금 해제 대기 중 — 태블릿에서 잠금을 해제해주세요',        bg: '#f39c12', color: '#fff'    },
+  AUTH_SUCCESS:      { text: '인증 완료',                                                 bg: '#27ae60', color: '#fff'    },
+  AUTH_FAIL:         { text: '인증 실패',                                                 bg: '#c0392b', color: '#fff'    },
   DELIVERY_OPEN_NUR: { text: '의료진 작업함 열림 — 작업 완료 후 태블릿에서 완료해주세요', bg: '#8e44ad', color: '#fff'    },
   DELIVERY_OPEN_PAT: { text: '환자 작업함 열림 — 환자 기기에서 완료해주세요',             bg: '#16a085', color: '#fff'    },
   COMPLETE:          { text: '처리 완료',                                                 bg: '#27ae60', color: '#fff'    },
