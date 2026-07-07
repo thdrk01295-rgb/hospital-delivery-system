@@ -433,18 +433,13 @@ const mainStyle: React.CSSProperties = {
   flexDirection: 'column',
   alignItems: 'center',
   justifyContent: 'center',
-  padding: '0.4rem 1rem',
-  gap: '0.65rem',
+  padding: '0',
+  gap: '0.15rem',
 }
 
-// Images are 1:1 square PNGs, tightly cropped.
-// Both width and height are capped by min(88vw, 1100px, 68vh) so the CSS box is
-// always square — objectFit:contain then fills it completely with no dead space.
-// Previously only width had the vw/px cap while height:auto + maxHeight:60vh made
-// the box rectangular; objectFit:contain then shrank the image to the shorter side.
 const faceStyle: React.CSSProperties = {
-  width: 'min(88vw, 1100px, 68vh)',
-  height: 'min(88vw, 1100px, 68vh)',
+  width: 'min(100vw, 100vh)',
+  height: 'min(100vw, 100vh)',
   objectFit: 'contain',
   display: 'block',
   userSelect: 'none',
