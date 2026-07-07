@@ -1,8 +1,8 @@
 <?xml version="1.0"?>
 <robot name="hospital_delivery_robot" xmlns:xacro="http://www.ros.org/wiki/xacro">
-  <xacro:property name="body_length" value="0.8182"/>
-  <xacro:property name="body_width" value="0.696"/>
-  <xacro:property name="body_height" value="0.9737"/>
+  <xacro:property name="body_length" value="0.83"/>
+  <xacro:property name="body_width" value="0.71"/>
+  <xacro:property name="body_height" value="0.91"/>
 
   <xacro:property name="wheel_separation" value="0.35"/>
   <xacro:property name="drive_wheel_diameter" value="0.125"/>
@@ -77,20 +77,20 @@
   <link name="base_link">
     <!-- TODO: Replace body primitive with Fusion 360 STL or DAE mesh after export. -->
     <visual>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <origin xyz="0 0 0.43" rpy="0 0 0"/>
       <geometry>
         <box size="${body_length} ${body_width} ${body_height}"/>
       </geometry>
       <material name="body_gray"/>
     </visual>
     <collision>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <origin xyz="0 0 0.43" rpy="0 0 0"/>
       <geometry>
         <box size="${body_length} ${body_width} ${body_height}"/>
       </geometry>
     </collision>
     <inertial>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <origin xyz="0 0 0.43" rpy="0 0 0"/>
       <mass value="15.0"/>
       <inertia ixx="0.5" ixy="0.0" ixz="0.0" iyy="0.8" iyz="0.0" izz="1.0"/>
     </inertial>
@@ -148,7 +148,7 @@
   <joint name="lidar_joint" type="fixed">
     <parent link="base_link"/>
     <child link="laser_frame"/>
-    <origin xyz="${lidar_x} ${lidar_y} ${lidar_z}" rpy="0 0 0"/>
+    <origin xyz="${lidar_x} ${lidar_y} ${lidar_z}" rpy="0 0 ${pi}"/>
   </joint>
 
   <link name="imu_link">
