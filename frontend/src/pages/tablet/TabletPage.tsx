@@ -434,12 +434,12 @@ const mainStyle: React.CSSProperties = {
   alignItems: 'center',
   justifyContent: 'center',
   padding: '0',
-  gap: '0.15rem',
+  gap: '2.2rem',
 }
 
 const faceStyle: React.CSSProperties = {
-  width: 'min(100vw, 100vh)',
-  height: 'min(100vw, 100vh)',
+  width: 'clamp(680px, 58vw, 950px)',
+  height: 'auto',
   objectFit: 'contain',
   display: 'block',
   userSelect: 'none',
