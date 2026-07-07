@@ -1,16 +1,9 @@
 scan_to_scan_filter_chain:
   ros__parameters:
     filter1:
-      name: rear_left_90_remove
+      name: raw_front_180_remove
       type: laser_filters/LaserScanAngularBoundsFilterInPlace
       params:
-        lower_angle: 1.5708
-        upper_angle: 3.1416
-        replace_with_nan: true
-    filter2:
-      name: rear_right_90_remove
-      type: laser_filters/LaserScanAngularBoundsFilterInPlace
-      params:
-        lower_angle: -3.1416
-        upper_angle: -1.5708
+        lower_angle: -1.5708
+        upper_angle: 1.5708
         replace_with_nan: true
