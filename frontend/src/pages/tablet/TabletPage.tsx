@@ -433,13 +433,15 @@ const mainStyle: React.CSSProperties = {
   flexDirection: 'column',
   alignItems: 'center',
   justifyContent: 'center',
-  padding: '2rem 1.5rem',
-  gap: '1.4rem',
+  padding: '0.75rem 1.5rem',
+  gap: '0.85rem',
 }
 
 const faceStyle: React.CSSProperties = {
-  width: 'min(55vw, 420px)',
+  width: 'min(78vw, 980px)',
+  maxHeight: '60vh',
   height: 'auto',
+  objectFit: 'contain',
   userSelect: 'none',
   flexShrink: 0,
 }
