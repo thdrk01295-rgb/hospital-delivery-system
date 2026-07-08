@@ -9,24 +9,24 @@ export function EmergencyStopButton() {
   const isEmergency = activeEvent?.event_type === 'emergency_call'
 
   async function handleTrigger() {
-    if (!window.confirm('긴급 호출을 발생시키겠습니까?')) return
+    if (!window.confirm('비상 정지를 발동하겠습니까?')) return
     setLoading(true)
     try {
       await triggerEmergency()
     } catch (err) {
-      alert(err instanceof Error ? err.message : '긴급 호출 실패')
+      alert(err instanceof Error ? err.message : '비상 정지 실패')
     } finally {
       setLoading(false)
     }
   }
 
   async function handleRelease() {
-    if (!window.confirm('긴급 상태를 해제하겠습니까?')) return
+    if (!window.confirm('비상 정지를 해제하겠습니까?')) return
     setLoading(true)
     try {
       await releaseEmergency()
     } catch (err) {
-      alert(err instanceof Error ? err.message : '긴급 해제 실패')
+      alert(err instanceof Error ? err.message : '비상 해제 실패')
     } finally {
       setLoading(false)
     }
@@ -50,7 +50,7 @@ export function EmergencyStopButton() {
           opacity: loading ? 0.7 : 1,
         }}
       >
-        {loading ? '처리 중...' : '⚠ 긴급 해제'}
+        {loading ? '처리 중...' : '⚠ 비상 해제'}
       </button>
     )
   }
@@ -72,7 +72,7 @@ export function EmergencyStopButton() {
         opacity: loading ? 0.7 : 1,
       }}
     >
-      {loading ? '처리 중...' : '🚨 긴급 호출'}
+      {loading ? '처리 중...' : '🚨 비상 정지'}
     </button>
   )
 }
