@@ -98,6 +98,13 @@ export function LoginPage({ variant }: Props) {
             <a href="/login/patient" style={{ color: '#2980b9' }}>여기</a>
           </p>
         )}
+
+        {variant === 'patient' && (
+          <p style={{ textAlign: 'center', marginTop: '1rem', fontSize: '0.85rem', color: '#888' }}>
+            의료진 로그인은{' '}
+            <a href="/login/nurse" style={{ color: '#2980b9' }}>여기</a>
+          </p>
+        )}
       </form>
     </div>
   )
