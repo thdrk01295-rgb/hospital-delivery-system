@@ -74,6 +74,7 @@ private:
   void applyReverseGuard(
     geometry_msgs::msg::Twist & output,
     const std::array<SensorView, kSensorCount> & views,
+    double angular_z,
     GuardStatus & status) const;
   void applyRotateGuard(
     geometry_msgs::msg::Twist & output,
