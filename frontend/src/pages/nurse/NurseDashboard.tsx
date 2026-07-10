@@ -13,7 +13,7 @@
  *   (dispatched by useWebSocket in App.tsx → Zustand stores).
  */
 import { useEffect, useState }        from 'react'
-import { Link, useNavigate }           from 'react-router-dom'
+import { useNavigate }                 from 'react-router-dom'
 import { fetchRobotStatus }            from '@/api/robot'
 import { fetchOngoingTasks, fetchCompletedTasks, cancelNurseTask } from '@/api/tasks'
 import { fetchRobotInventory } from '@/api/inventory'
@@ -98,7 +98,6 @@ export function NurseDashboard() {
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <Link to="/nurse/orders/new" style={navLink}>새 오더</Link>
           <button onClick={handleLogout} style={navBtn}>로그아웃</button>
           <EmergencyStopButton />
         </div>
@@ -296,15 +295,6 @@ const emptyMsg: React.CSSProperties = {
   margin: '0.25rem 0',
 }
 
-const navLink: React.CSSProperties = {
-  padding: '0.35rem 0.85rem',
-  background: 'rgba(255,255,255,0.12)',
-  color: '#fff',
-  borderRadius: 6,
-  textDecoration: 'none',
-  fontSize: '0.82rem',
-  fontWeight: 600,
-}
 
 const navBtn: React.CSSProperties = {
   padding: '0.35rem 0.85rem',
