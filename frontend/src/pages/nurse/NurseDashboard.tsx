@@ -16,7 +16,7 @@ import { useEffect, useState }        from 'react'
 import { Link, useNavigate }           from 'react-router-dom'
 import { fetchRobotStatus }            from '@/api/robot'
 import { fetchOngoingTasks, fetchCompletedTasks, cancelNurseTask } from '@/api/tasks'
-import { fetchInventory }              from '@/api/inventory'
+import { fetchInventory, fetchRobotInventory } from '@/api/inventory'
 import { fetchActiveAbnormalEvent }    from '@/api/abnormalEvents'
 import { useRobotStore }               from '@/store/robotStore'
 import { useTaskStore }                from '@/store/taskStore'
@@ -29,6 +29,7 @@ import { InventoryTable }              from '@/components/InventoryTable'
 import { EmergencyStopButton }         from '@/components/EmergencyStopButton'
 import { SystemStatusCard }            from '@/components/SystemStatusCard'
 import { TaskCreatePanel }             from '@/components/TaskCreatePanel'
+import { RobotInventoryPanel }         from '@/components/RobotInventoryPanel'
 import type { Task }                   from '@/types'
 
 export function NurseDashboard() {
@@ -37,7 +38,7 @@ export function NurseDashboard() {
 
   const { robot, setRobot }                                                   = useRobotStore()
   const { ongoingTasks, completedTasks, setOngoingTasks, setCompletedTasks, applyTaskUpdate } = useTaskStore()
-  const { items: inventory, setItems }                                        = useInventoryStore()
+  const { items: inventory, robotInventory, setItems, setRobotInventory }    = useInventoryStore()
   const { setActiveEvent }                                                    = useAbnormalEventStore()
   const [now, setNow]                                                         = useState(new Date())
 
@@ -53,12 +54,14 @@ export function NurseDashboard() {
       fetchCompletedTasks(),
       fetchInventory(),
       fetchActiveAbnormalEvent(),
-    ]).then(([robotData, ongoing, completed, inv, abnormal]) => {
+      fetchRobotInventory().catch(() => null),
+    ]).then(([robotData, ongoing, completed, inv, abnormal, robotInv]) => {
       setRobot(robotData)
       setOngoingTasks(ongoing)
       setCompletedTasks(completed)
       setItems(inv)
       setActiveEvent(abnormal)
+      if (robotInv) setRobotInventory(robotInv)
     }).catch(console.error)
   }, [])
 
@@ -119,6 +122,11 @@ export function NurseDashboard() {
             <InventoryTable items={inventory} />
           </div>
 
+          <div style={card}>
+            <div style={{ ...sectionLabel, marginBottom: '0.6rem' }}>로봇 탑재 재고</div>
+            <RobotInventoryPanel inventory={robotInventory} />
+          </div>
+
           <TaskCreatePanel />
         </aside>
 
@@ -162,6 +170,7 @@ export function NurseDashboard() {
 const TYPE_LABELS: Record<string, string> = {
   clothes_refill:          '의류 보충',
   kit_delivery:            '키트 배송',
+  kit_refill:              '키트 보충',
   specimen_delivery:       '검체 배송',
   logistics_delivery:      '물류 배송',
   used_clothes_collection: '사용 의류 수거',

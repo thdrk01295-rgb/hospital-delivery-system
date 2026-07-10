@@ -1,10 +1,13 @@
 """
 Task service — creates, queries, and updates tasks.
 """
+import logging
 from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 from app.models.task import Task
 from app.models.location import Location
@@ -140,20 +143,37 @@ def finalize_task_complete(db: Session, task_id: int,
                            robot_id: Optional[int] = None) -> Optional[Task]:
     """
     Atomically marks a task COMPLETE and updates robot inventory in one transaction.
-    Use this everywhere a task reaches its final COMPLETE state (tablet, patient web, MQTT).
+
+    Idempotency: if task.inventory_applied is already True the function returns
+    the existing row without re-applying any mutations, making it safe to call
+    from duplicate MQTT messages or retried HTTP requests.
+
+    Raises ValueError if an inventory mutation would make a count negative;
+    the transaction is NOT committed in that case.
     """
-    from app.services.robot_inventory_service import update_robot_inventory_on_complete
+    from app.services.robot_inventory_service import apply_inventory_effect_for_completed_task
 
     task = db.query(Task).filter(Task.id == task_id).first()
     if not task:
         return None
+
+    # Idempotency guard — if already finalized, skip without re-mutating inventory
+    if task.inventory_applied:
+        logger.info(
+            f"[finalize] task_id={task_id} already finalized "
+            f"(inventory_applied=True) — returning cached result"
+        )
+        return task
+
     task.status = TaskStatus.COMPLETE
+    task.inventory_applied = True
     if not task.started_at:
         task.started_at = datetime.now(timezone.utc)
     task.completed_at = datetime.now(timezone.utc)
 
     if robot_id is not None:
-        update_robot_inventory_on_complete(db, robot_id, task)
+        # May raise ValueError; caller must NOT commit if this raises
+        apply_inventory_effect_for_completed_task(db, robot_id, task)
 
     db.commit()
     db.refresh(task)

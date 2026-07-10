@@ -138,6 +138,17 @@ export interface InventoryItem {
   updated_at: string
 }
 
+export interface RobotInventory {
+  robot_id: number
+  kit_count: number
+  clothes_top_count: number
+  clothes_bottom_count: number
+  kit_capacity: number
+  clothes_top_capacity: number
+  clothes_bottom_capacity: number
+  updated_at: string
+}
+
 // ── Abnormal events ──────────────────────────────────────────────────────────
 
 export type AbnormalEventType = 'error' | 'low_battery' | 'emergency_call'
@@ -180,11 +191,9 @@ export interface WsMessage<T = unknown> {
   data: T
 }
 
-export interface WsInventoryUpdate {
-  location_id: number
-  clean_count: number
-  used_count: number
-}
+export type WsInventoryUpdate =
+  | { type: 'robot'; kit_count: number; clothes_top_count: number; clothes_bottom_count: number }
+  | { location_id: number; clean_count: number; used_count: number }
 
 export interface WsAbnormalEventUpdate {
   event_type: AbnormalEventType

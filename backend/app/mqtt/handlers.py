@@ -587,11 +587,12 @@ def _handle_task_complete(raw: dict) -> None:
     Handles robot/task_complete:
       1. Mark task COMPLETE and update robot inventory atomically.
       2. Infer robot current location from the completed task's destination.
-      3. Broadcast task_status_update and robot_location_update (if location changed).
+      3. Broadcast task_status_update, inventory_update, and robot_location_update (if changed).
     """
     from app.db.session import SessionLocal
     from app.services.task_service import finalize_task_complete
     from app.services.robot_service import get_or_create_robot, get_robot_status_dict
+    from app.services.robot_inventory_service import get_or_create_robot_inventory, robot_inventory_ws_payload
     from app.schemas.task import TaskRead
     from app.websocket.manager import ws_manager
 
@@ -599,7 +600,16 @@ def _handle_task_complete(raw: dict) -> None:
     db = SessionLocal()
     try:
         robot = get_or_create_robot(db, data.robot_id)
-        task = finalize_task_complete(db, data.task_id, robot_id=robot.id)
+        try:
+            task = finalize_task_complete(db, data.task_id, robot_id=robot.id)
+        except ValueError as exc:
+            logger.error(
+                f"[task_complete] Inventory integrity error for task_id={data.task_id}: {exc} "
+                f"— task NOT marked complete; transaction rolled back"
+            )
+            db.rollback()
+            return
+
         if not task:
             logger.warning(f"robot/task_complete: task {data.task_id} not found")
             return
@@ -608,6 +618,10 @@ def _handle_task_complete(raw: dict) -> None:
         clear_current_stop(data.task_id)
         task_dict = TaskRead.model_validate(task).model_dump(mode="json")
         _schedule(ws_manager.broadcast(ws_events.TASK_STATUS_UPDATE, task_dict))
+
+        # Broadcast updated robot inventory after commit
+        inv = get_or_create_robot_inventory(db, robot.id)
+        _schedule(ws_manager.broadcast(ws_events.INVENTORY_UPDATE, robot_inventory_ws_payload(inv)))
 
         # Infer robot current location from the completed task's destination
         if task.destination_location_id:

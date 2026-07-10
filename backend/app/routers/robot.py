@@ -219,6 +219,12 @@ async def complete_task_from_tablet(
         task_dict = TaskRead.model_validate(task).model_dump(mode="json")
         await ws_manager.broadcast(ws_events.TASK_STATUS_UPDATE, task_dict)
 
+        # Broadcast updated robot inventory after commit
+        from app.services.robot_inventory_service import get_or_create_robot_inventory, robot_inventory_ws_payload
+        from app.constants import ws_events as _ws_events
+        inv = get_or_create_robot_inventory(db, robot.id)
+        await ws_manager.broadcast(_ws_events.INVENTORY_UPDATE, robot_inventory_ws_payload(inv))
+
         publish(mqtt_topics.SERVER_TASK_FINISH, {
             "robot_id": body.robot_id,
             "task_id": active_task.id,

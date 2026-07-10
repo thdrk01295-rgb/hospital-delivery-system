@@ -11,8 +11,11 @@ from app.schemas.location import LocationRead
 
 # Types that never require the nurse to supply a destination (server resolves it)
 _AUTO_DEST_TYPES: set[TaskType] = {TaskType.KIT_REFILL, TaskType.CLOTHES_REFILL}
-# Types that must never receive an origin from the nurse
-_NO_ORIGIN_TYPES: set[TaskType] = {TaskType.KIT_DELIVERY, TaskType.KIT_REFILL, TaskType.CLOTHES_REFILL}
+
+# Destination-only task types: must never carry an origin (applies to nurse-created tasks)
+_NO_ORIGIN_NURSE_TYPES: set[TaskType] = {
+    TaskType.KIT_DELIVERY, TaskType.KIT_REFILL, TaskType.CLOTHES_REFILL
+}
 
 
 class NurseOrderCreate(BaseModel):
@@ -32,9 +35,12 @@ class NurseOrderCreate(BaseModel):
             raise ValueError(
                 "battery_low is a system-internal task type and cannot be created manually"
             )
-        # Silently clear origin for types where it is not applicable
-        if self.task_type in _NO_ORIGIN_TYPES:
-            self.origin_location_id = None
+        # Reject an explicit origin for destination-only task types (HTTP 422)
+        if self.task_type in _NO_ORIGIN_NURSE_TYPES and self.origin_location_id is not None:
+            raise ValueError(
+                f"'{self.task_type}' is a destination-only task type — "
+                "origin_location_id must not be supplied"
+            )
         # Auto-dest types (kit_refill, clothes_refill) don't need a client-supplied destination
         dest_required = self.task_type not in _AUTO_DEST_TYPES and self.task_type != TaskType.EMERGENCY_CALL
         if dest_required and not self.destination_location_id:
@@ -51,6 +57,15 @@ class PatientClothingRequestCreate(BaseModel):
     note: Optional[str] = None
     order_top: Optional[int] = None
     order_bottom: Optional[int] = None
+
+    @model_validator(mode="after")
+    def check_clothes_rental(self) -> "PatientClothingRequestCreate":
+        if self.task_type == TaskType.PATIENT_CLOTHES_RENTAL:
+            if not self.order_top and not self.order_bottom:
+                raise ValueError(
+                    "At least one of order_top or order_bottom must be 1 for patient_clothes_rental"
+                )
+        return self
 
 
 # ── Response bodies ──────────────────────────────────────────────────────────

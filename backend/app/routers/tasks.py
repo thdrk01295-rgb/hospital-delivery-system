@@ -17,6 +17,11 @@ from app.services.task_service import (
     requeue_task,
     finalize_task_complete,
 )
+from app.services.robot_inventory_service import (
+    validate_inventory_for_task_creation,
+    get_or_create_robot_inventory,
+    robot_inventory_ws_payload,
+)
 from app.services.abnormal_event_service import open_event, resolve_all_by_type
 from app.services.auth_service import decode_token
 from app.services.task_lock_phase_store import clear_task_lock_phase
@@ -54,6 +59,16 @@ async def create_order(
     payload = _get_token_payload(authorization)
     if payload.get("role") != "nurse":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Nurses only")
+
+    # Validate robot inventory availability before accepting the order
+    from app.models.robot import Robot as RobotModel
+    robot = db.query(RobotModel).first()
+    if robot:
+        validate_inventory_for_task_creation(
+            db, robot.id, body.task_type,
+            order_top=body.order_top, order_bottom=body.order_bottom,
+        )
+
     task = create_nurse_task(db, body, nurse_id=payload.get("sub", "nurse"))
     task_dict = TaskRead.model_validate(task).model_dump(mode="json")
     await ws_manager.broadcast(ws_events.TASK_STATUS_UPDATE, task_dict)
@@ -219,6 +234,17 @@ def patient_clothing_request(
     if body.task_type not in (TaskType.PATIENT_CLOTHES_RENTAL, TaskType.PATIENT_CLOTHES_RETURN):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                             detail="Invalid task type for patient request")
+
+    # Validate inventory before accepting rental requests
+    if body.task_type == TaskType.PATIENT_CLOTHES_RENTAL:
+        from app.models.robot import Robot as RobotModel
+        robot = db.query(RobotModel).first()
+        if robot:
+            validate_inventory_for_task_creation(
+                db, robot.id, body.task_type,
+                order_top=body.order_top, order_bottom=body.order_bottom,
+            )
+
     bed_code = payload.get("bed_code")
     return create_patient_task(db, body, bed_code=bed_code)
 
@@ -263,6 +289,11 @@ async def patient_complete_task(
     task = finalize_task_complete(db, task_id, robot_id=robot_db_id)
     task_dict = TaskRead.model_validate(task).model_dump(mode="json")
     await ws_manager.broadcast(ws_events.TASK_STATUS_UPDATE, task_dict)
+
+    # Broadcast updated robot inventory after commit
+    if robot_db_id is not None:
+        inv = get_or_create_robot_inventory(db, robot_db_id)
+        await ws_manager.broadcast(ws_events.INVENTORY_UPDATE, robot_inventory_ws_payload(inv))
 
     # Signal robot to clear the matched patient task and publish IDLE
     from app.mqtt.client import publish
