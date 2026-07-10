@@ -1,5 +1,5 @@
 """
-24 test cases for robot inventory service and related business logic.
+Test suite for robot inventory service and related business logic.
 """
 import pytest
 from fastapi import HTTPException
@@ -12,7 +12,7 @@ from app.models.robot_inventory import (
     ROBOT_CLOTHES_BOTTOM_CAPACITY,
 )
 from app.models.task import Task
-from app.schemas.task import NurseOrderCreate, PatientClothingRequestCreate
+from app.schemas.task import NurseOrderCreate, PatientClothingRequestCreate, NURSE_CREATABLE_TASK_TYPES
 from app.services.robot_inventory_service import (
     get_or_create_robot_inventory,
     validate_inventory_for_task_creation,
@@ -332,8 +332,46 @@ def test_nurse_order_kit_refill_rejects_origin():
 # Audit fixes — additional tests
 # ══════════════════════════════════════════════════════════════════════════════
 
+# ══════════════════════════════════════════════════════════════════════════════
+# §3 — nurse TaskType ownership (NURSE_CREATABLE_TASK_TYPES)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def test_nurse_creatable_set_contains_expected_types():
+    """NURSE_CREATABLE_TASK_TYPES includes exactly the six nurse-orderable types."""
+    expected = {
+        TaskType.CLOTHES_REFILL, TaskType.KIT_REFILL, TaskType.KIT_DELIVERY,
+        TaskType.SPECIMEN_DELIVERY, TaskType.LOGISTICS_DELIVERY,
+        TaskType.USED_CLOTHES_COLLECTION,
+    }
+    assert NURSE_CREATABLE_TASK_TYPES == expected
+
+
+def test_nurse_order_rejects_patient_clothes_rental():
+    """PATIENT_CLOTHES_RENTAL is not nurse-creatable — must raise 422."""
+    with pytest.raises(Exception):
+        NurseOrderCreate(task_type=TaskType.PATIENT_CLOTHES_RENTAL)
+
+
+def test_nurse_order_rejects_patient_clothes_return():
+    """PATIENT_CLOTHES_RETURN is not nurse-creatable — must raise 422."""
+    with pytest.raises(Exception):
+        NurseOrderCreate(task_type=TaskType.PATIENT_CLOTHES_RETURN)
+
+
+def test_nurse_order_rejects_battery_low():
+    """BATTERY_LOW is system-internal — must raise 422."""
+    with pytest.raises(Exception):
+        NurseOrderCreate(task_type=TaskType.BATTERY_LOW, destination_location_id=1)
+
+
+def test_nurse_order_rejects_emergency_call():
+    """EMERGENCY_CALL is not nurse-orderable via NurseOrderCreate — must raise 422."""
+    with pytest.raises(Exception):
+        NurseOrderCreate(task_type=TaskType.EMERGENCY_CALL)
+
+
 def test_nurse_order_patient_clothes_rental_rejects_origin():
-    """Defect-fix: PATIENT_CLOTHES_RENTAL with origin_location_id must raise HTTP 422."""
+    """PATIENT_CLOTHES_RENTAL with origin_location_id must raise (now via type check, not origin check)."""
     with pytest.raises(Exception):
         NurseOrderCreate(
             task_type=TaskType.PATIENT_CLOTHES_RENTAL,
@@ -343,7 +381,7 @@ def test_nurse_order_patient_clothes_rental_rejects_origin():
 
 
 def test_nurse_order_patient_clothes_return_rejects_origin():
-    """Defect-fix: PATIENT_CLOTHES_RETURN with origin_location_id must raise HTTP 422."""
+    """PATIENT_CLOTHES_RETURN with origin_location_id must raise (now via type check)."""
     with pytest.raises(Exception):
         NurseOrderCreate(
             task_type=TaskType.PATIENT_CLOTHES_RETURN,
@@ -352,10 +390,13 @@ def test_nurse_order_patient_clothes_return_rejects_origin():
         )
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# Pre-migration idempotency guard (status==COMPLETE with inventory_applied=False)
+# ══════════════════════════════════════════════════════════════════════════════
+
 def test_finalize_already_complete_status_is_idempotent(db, robot_row, inv):
-    """Defect-fix: a task whose status=COMPLETE but inventory_applied=False (pre-migration row)
+    """A task with status=COMPLETE but inventory_applied=False (pre-migration row)
     must not re-apply inventory when finalize_task_complete is called again."""
-    # Simulate a pre-migration COMPLETE task: status=COMPLETE, inventory_applied=False
     before_kit = inv.kit_count
     t = Task(
         task_type=TaskType.KIT_DELIVERY,
@@ -371,6 +412,36 @@ def test_finalize_already_complete_status_is_idempotent(db, robot_row, inv):
 
     result = finalize_task_complete(db, t.id, robot_id=robot_row.id)
 
-    # Must return idempotently without touching inventory
     assert result.status == TaskStatus.COMPLETE
-    assert inv.kit_count == before_kit  # no decrement
+    assert inv.kit_count == before_kit  # no decrement applied
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Post-commit idempotency (proves second call is no-op after first succeeds)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def test_finalize_second_call_after_commit_is_no_op(db, robot_row, inv):
+    """After a successful finalize_task_complete, a second call must return
+    the same task without decrementing inventory again.
+    This is the serializable-path equivalent of the concurrency guard:
+    inventory_applied=True after the first commit blocks any second application."""
+    t = Task(
+        task_type=TaskType.KIT_DELIVERY,
+        requested_by_role=RequestedByRole.NURSE,
+        priority=3,
+        status=TaskStatus.DISPATCHED,
+        assigned_robot_id=robot_row.id,
+    )
+    db.add(t)
+    db.commit()
+    db.refresh(t)
+
+    result1 = finalize_task_complete(db, t.id, robot_id=robot_row.id)
+    kit_after_first = db.query(RobotInventory).filter_by(robot_id=robot_row.id).first().kit_count
+
+    result2 = finalize_task_complete(db, t.id, robot_id=robot_row.id)
+    kit_after_second = db.query(RobotInventory).filter_by(robot_id=robot_row.id).first().kit_count
+
+    assert result1.id == result2.id
+    assert result1.inventory_applied is True
+    assert kit_after_first == kit_after_second  # no double-deduction

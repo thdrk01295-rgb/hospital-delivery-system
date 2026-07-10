@@ -58,11 +58,27 @@ def validate_inventory_for_task_creation(
 
     Only kit_delivery and patient_clothes_rental consume inventory at creation.
     All other task types pass through without a check.
+
+    Concurrency: for inventory-consuming types the robot_inventories row is
+    loaded with a write lock (WITH UPDLOCK on MSSQL) before counting reservations.
+    The lock is held until the caller's db.commit(), preventing two simultaneous
+    requests from over-allocating the same last inventory unit.
     """
-    inv = get_or_create_robot_inventory(db, robot_id)
+    if task_type not in (TaskType.KIT_DELIVERY, TaskType.PATIENT_CLOTHES_RENTAL):
+        return
+
+    # Ensure the row exists (creates it if missing, with a plain SELECT first)
+    get_or_create_robot_inventory(db, robot_id)
+
+    # Re-acquire with a write lock so the reservation count is stable until commit
+    inv = (
+        db.query(RobotInventory)
+        .filter(RobotInventory.robot_id == robot_id)
+        .with_for_update()
+        .first()
+    )
 
     if task_type == TaskType.KIT_DELIVERY:
-        # Count active kit_delivery tasks that are already consuming a kit
         reserved = (
             db.query(Task)
             .filter(

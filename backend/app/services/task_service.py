@@ -144,23 +144,40 @@ def finalize_task_complete(db: Session, task_id: int,
     """
     Atomically marks a task COMPLETE and updates robot inventory in one transaction.
 
-    Idempotency: if task.inventory_applied is already True the function returns
-    the existing row without re-applying any mutations, making it safe to call
-    from duplicate MQTT messages or retried HTTP requests.
+    Concurrency: both the Task row and the RobotInventory row are acquired with
+    write locks (WITH UPDLOCK on MSSQL) before the idempotency check and before
+    any mutation.  This serializes concurrent duplicate completion requests so
+    that exactly one applies inventory, even when two requests arrive before
+    either transaction commits.
+
+    Idempotency: the double-guard (inventory_applied OR status==COMPLETE) is
+    re-evaluated *under the lock*, making it safe against duplicate MQTT
+    messages, retried HTTP requests, and pre-migration rows whose
+    inventory_applied is False despite being already COMPLETE.
 
     Raises ValueError if an inventory mutation would make a count negative;
     the transaction is NOT committed in that case.
     """
-    from app.services.robot_inventory_service import apply_inventory_effect_for_completed_task
+    from app.services.robot_inventory_service import (
+        apply_inventory_effect_for_completed_task,
+        get_or_create_robot_inventory,
+    )
+    from app.models.robot_inventory import RobotInventory
 
-    task = db.query(Task).filter(Task.id == task_id).first()
+    # Step 1: acquire write lock on the Task row
+    task = (
+        db.query(Task)
+        .filter(Task.id == task_id)
+        .with_for_update()
+        .first()
+    )
     if not task:
         return None
 
-    # Idempotency guard — two cases:
-    # (a) inventory_applied=True: already processed in the current schema era.
-    # (b) status=COMPLETE but inventory_applied=False: task completed before migration
-    #     0005 added the flag; treat as already finalized to prevent double-application.
+    # Step 2: idempotency check under lock
+    # (a) inventory_applied=True: already processed post-migration.
+    # (b) status=COMPLETE but inventory_applied=False: completed before migration 0005
+    #     added the flag; treat as already finalized.
     if task.inventory_applied or task.status == TaskStatus.COMPLETE:
         logger.info(
             f"[finalize] task_id={task_id} already finalized "
@@ -168,6 +185,15 @@ def finalize_task_complete(db: Session, task_id: int,
         )
         return task
 
+    # Step 3: acquire write lock on the RobotInventory row (ensures serialization
+    # with concurrent validate_inventory_for_task_creation callers)
+    if robot_id is not None:
+        get_or_create_robot_inventory(db, robot_id)   # ensure the row exists
+        db.query(RobotInventory).filter(
+            RobotInventory.robot_id == robot_id
+        ).with_for_update().first()
+
+    # Steps 4–7: apply mutations in memory (single commit below)
     task.status = TaskStatus.COMPLETE
     task.inventory_applied = True
     if not task.started_at:
@@ -178,6 +204,8 @@ def finalize_task_complete(db: Session, task_id: int,
         # May raise ValueError; caller must NOT commit if this raises
         apply_inventory_effect_for_completed_task(db, robot_id, task)
 
+    # Step 8: single commit — task status, inventory_applied, and inventory counts
+    # are all written atomically
     db.commit()
     db.refresh(task)
     return task

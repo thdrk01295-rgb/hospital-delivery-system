@@ -9,18 +9,26 @@ from app.schemas.location import LocationRead
 
 # ── Request bodies ──────────────────────────────────────────────────────────
 
+# Exclusive set of task types a nurse may create via POST /tasks/nurse/order.
+# patient/system types are not listed and are rejected with HTTP 422.
+NURSE_CREATABLE_TASK_TYPES: set[TaskType] = {
+    TaskType.CLOTHES_REFILL,
+    TaskType.KIT_REFILL,
+    TaskType.KIT_DELIVERY,
+    TaskType.SPECIMEN_DELIVERY,
+    TaskType.LOGISTICS_DELIVERY,
+    TaskType.USED_CLOTHES_COLLECTION,
+}
+
 # Types that never require the nurse to supply a destination (server resolves it)
 _AUTO_DEST_TYPES: set[TaskType] = {TaskType.KIT_REFILL, TaskType.CLOTHES_REFILL}
 
-# Destination-only task types: must never carry an origin (applies to nurse-created tasks).
-# patient_clothes_rental/return are patient-only but are included here so that if a nurse
-# endpoint receives them the origin is still rejected with HTTP 422.
+# Nurse-creatable types that must never carry an origin (robot goes straight to destination).
+# Patient types are not listed here because they are rejected by NURSE_CREATABLE_TASK_TYPES first.
 _NO_ORIGIN_NURSE_TYPES: set[TaskType] = {
     TaskType.KIT_DELIVERY,
     TaskType.KIT_REFILL,
     TaskType.CLOTHES_REFILL,
-    TaskType.PATIENT_CLOTHES_RENTAL,
-    TaskType.PATIENT_CLOTHES_RETURN,
 }
 
 
@@ -36,10 +44,10 @@ class NurseOrderCreate(BaseModel):
 
     @model_validator(mode="after")
     def check_locations(self) -> "NurseOrderCreate":
-        # BATTERY_LOW is system-internal only — never user-creatable
-        if self.task_type == TaskType.BATTERY_LOW:
+        # Reject patient/system task types — they are not nurse-orderable (HTTP 422)
+        if self.task_type not in NURSE_CREATABLE_TASK_TYPES:
             raise ValueError(
-                "battery_low is a system-internal task type and cannot be created manually"
+                f"'{self.task_type}' cannot be created via the nurse order endpoint"
             )
         # Reject an explicit origin for destination-only task types (HTTP 422)
         if self.task_type in _NO_ORIGIN_NURSE_TYPES and self.origin_location_id is not None:
@@ -48,7 +56,7 @@ class NurseOrderCreate(BaseModel):
                 "origin_location_id must not be supplied"
             )
         # Auto-dest types (kit_refill, clothes_refill) don't need a client-supplied destination
-        dest_required = self.task_type not in _AUTO_DEST_TYPES and self.task_type != TaskType.EMERGENCY_CALL
+        dest_required = self.task_type not in _AUTO_DEST_TYPES
         if dest_required and not self.destination_location_id:
             raise ValueError("destination_location_id is required for this task type")
         return self
