@@ -157,11 +157,14 @@ def finalize_task_complete(db: Session, task_id: int,
     if not task:
         return None
 
-    # Idempotency guard — if already finalized, skip without re-mutating inventory
-    if task.inventory_applied:
+    # Idempotency guard — two cases:
+    # (a) inventory_applied=True: already processed in the current schema era.
+    # (b) status=COMPLETE but inventory_applied=False: task completed before migration
+    #     0005 added the flag; treat as already finalized to prevent double-application.
+    if task.inventory_applied or task.status == TaskStatus.COMPLETE:
         logger.info(
             f"[finalize] task_id={task_id} already finalized "
-            f"(inventory_applied=True) — returning cached result"
+            f"(inventory_applied={task.inventory_applied} status={task.status}) — returning"
         )
         return task
 

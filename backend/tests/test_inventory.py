@@ -326,3 +326,51 @@ def test_nurse_order_kit_refill_rejects_origin():
             task_type=TaskType.KIT_REFILL,
             origin_location_id=1,
         )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Audit fixes — additional tests
+# ══════════════════════════════════════════════════════════════════════════════
+
+def test_nurse_order_patient_clothes_rental_rejects_origin():
+    """Defect-fix: PATIENT_CLOTHES_RENTAL with origin_location_id must raise HTTP 422."""
+    with pytest.raises(Exception):
+        NurseOrderCreate(
+            task_type=TaskType.PATIENT_CLOTHES_RENTAL,
+            origin_location_id=1,
+            destination_location_id=2,
+        )
+
+
+def test_nurse_order_patient_clothes_return_rejects_origin():
+    """Defect-fix: PATIENT_CLOTHES_RETURN with origin_location_id must raise HTTP 422."""
+    with pytest.raises(Exception):
+        NurseOrderCreate(
+            task_type=TaskType.PATIENT_CLOTHES_RETURN,
+            origin_location_id=1,
+            destination_location_id=2,
+        )
+
+
+def test_finalize_already_complete_status_is_idempotent(db, robot_row, inv):
+    """Defect-fix: a task whose status=COMPLETE but inventory_applied=False (pre-migration row)
+    must not re-apply inventory when finalize_task_complete is called again."""
+    # Simulate a pre-migration COMPLETE task: status=COMPLETE, inventory_applied=False
+    before_kit = inv.kit_count
+    t = Task(
+        task_type=TaskType.KIT_DELIVERY,
+        requested_by_role=RequestedByRole.NURSE,
+        priority=3,
+        status=TaskStatus.COMPLETE,
+        assigned_robot_id=robot_row.id,
+        inventory_applied=False,
+    )
+    db.add(t)
+    db.commit()
+    db.refresh(t)
+
+    result = finalize_task_complete(db, t.id, robot_id=robot_row.id)
+
+    # Must return idempotently without touching inventory
+    assert result.status == TaskStatus.COMPLETE
+    assert inv.kit_count == before_kit  # no decrement

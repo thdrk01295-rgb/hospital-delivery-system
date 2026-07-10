@@ -12,9 +12,15 @@ from app.schemas.location import LocationRead
 # Types that never require the nurse to supply a destination (server resolves it)
 _AUTO_DEST_TYPES: set[TaskType] = {TaskType.KIT_REFILL, TaskType.CLOTHES_REFILL}
 
-# Destination-only task types: must never carry an origin (applies to nurse-created tasks)
+# Destination-only task types: must never carry an origin (applies to nurse-created tasks).
+# patient_clothes_rental/return are patient-only but are included here so that if a nurse
+# endpoint receives them the origin is still rejected with HTTP 422.
 _NO_ORIGIN_NURSE_TYPES: set[TaskType] = {
-    TaskType.KIT_DELIVERY, TaskType.KIT_REFILL, TaskType.CLOTHES_REFILL
+    TaskType.KIT_DELIVERY,
+    TaskType.KIT_REFILL,
+    TaskType.CLOTHES_REFILL,
+    TaskType.PATIENT_CLOTHES_RENTAL,
+    TaskType.PATIENT_CLOTHES_RETURN,
 }
 
 
