@@ -3,6 +3,7 @@ import type { Task } from '@/types'
 const TYPE_LABELS: Record<string, string> = {
   clothes_refill:           '의류 보충',
   kit_delivery:             '키트 배송',
+  kit_refill:               '키트 보충',
   specimen_delivery:        '검체 배송',
   logistics_delivery:       '물류 배송',
   used_clothes_collection:  '사용 의류 수거',

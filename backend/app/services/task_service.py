@@ -12,12 +12,34 @@ from app.models.robot import Robot
 from app.constants.enums import TaskStatus, TaskType, RequestedByRole
 from app.schemas.task import NurseOrderCreate, PatientClothingRequestCreate
 
+# Task types where origin must always be null (robot doesn't start from a specific stop)
+_NO_ORIGIN_NURSE_TYPES: set[str] = {
+    TaskType.KIT_DELIVERY,
+    TaskType.KIT_REFILL,
+    TaskType.CLOTHES_REFILL,
+}
+
+# Task types with a fixed server-resolved destination (nurse doesn't choose)
+_FIXED_DEST: dict[str, str] = {
+    TaskType.KIT_REFILL:    "WAREHOUSE-01",
+    TaskType.CLOTHES_REFILL: "LAUNDRY-01",
+}
+
 
 def create_nurse_task(db: Session, body: NurseOrderCreate, nurse_id: str = "nurse") -> Task:
+    origin_id = None if body.task_type in _NO_ORIGIN_NURSE_TYPES else body.origin_location_id
+
+    # Resolve fixed destination for types that always go to a known location
+    dest_id = body.destination_location_id
+    if body.task_type in _FIXED_DEST:
+        loc_code = _FIXED_DEST[body.task_type]
+        loc = db.query(Location).filter(Location.location_code == loc_code).first()
+        dest_id = loc.id if loc else None
+
     task = Task(
         task_type=body.task_type,
-        origin_location_id=body.origin_location_id,
-        destination_location_id=body.destination_location_id,
+        origin_location_id=origin_id,
+        destination_location_id=dest_id,
         requested_by_role=RequestedByRole.NURSE,
         requested_by_user=nurse_id,
         priority=Task.resolve_priority(body.task_type),
@@ -38,19 +60,13 @@ def create_patient_task(db: Session, body: PatientClothingRequestCreate,
                         bed_code: str) -> Task:
     """
     Creates a patient clothes rental or return task.
-    Destination = patient's bed (robot's first trip target).
-    Origin = robot's current location at task creation time.
+    Destination = patient's bed.  Origin = null (robot starts from wherever it is).
     """
-    # Destination: patient's bed — where the robot must travel first
     dest = db.query(Location).filter(Location.location_code == bed_code).first()
-
-    # Origin: robot's current location
-    robot = db.query(Robot).order_by(Robot.id.asc()).first()
-    origin_id = robot.current_location_id if robot else None
 
     task = Task(
         task_type=body.task_type,
-        origin_location_id=origin_id,
+        origin_location_id=None,
         destination_location_id=dest.id if dest else None,
         patient_bed_code=bed_code,
         requested_by_role=RequestedByRole.PATIENT,
@@ -115,6 +131,30 @@ def update_task_status(db: Session, task_id: int, status: TaskStatus,
         task.started_at = datetime.now(timezone.utc)
     if status in (TaskStatus.COMPLETE, TaskStatus.CANCELLED, TaskStatus.FAILED):
         task.completed_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(task)
+    return task
+
+
+def finalize_task_complete(db: Session, task_id: int,
+                           robot_id: Optional[int] = None) -> Optional[Task]:
+    """
+    Atomically marks a task COMPLETE and updates robot inventory in one transaction.
+    Use this everywhere a task reaches its final COMPLETE state (tablet, patient web, MQTT).
+    """
+    from app.services.robot_inventory_service import update_robot_inventory_on_complete
+
+    task = db.query(Task).filter(Task.id == task_id).first()
+    if not task:
+        return None
+    task.status = TaskStatus.COMPLETE
+    if not task.started_at:
+        task.started_at = datetime.now(timezone.utc)
+    task.completed_at = datetime.now(timezone.utc)
+
+    if robot_id is not None:
+        update_robot_inventory_on_complete(db, robot_id, task)
+
     db.commit()
     db.refresh(task)
     return task

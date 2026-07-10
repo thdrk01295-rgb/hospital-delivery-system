@@ -18,6 +18,7 @@ import type { Location, BedSelectorMeta, NurseOrderCreate, TaskType } from '@/ty
 const ORDER_TYPES: { value: TaskType; label: string }[] = [
   { value: 'clothes_refill',          label: '의류 보충 (Clothes Refill)' },
   { value: 'kit_delivery',            label: '키트 배송 (Kit Delivery)' },
+  { value: 'kit_refill',              label: '키트 보충 (Kit Refill)' },
   { value: 'specimen_delivery',       label: '검체 배송 (Specimen Delivery)' },
   { value: 'logistics_delivery',      label: '물류 배송 (Logistics Delivery)' },
   { value: 'used_clothes_collection', label: '사용 의류 수거 (Used Clothes Collection)' },
@@ -26,7 +27,13 @@ const ORDER_TYPES: { value: TaskType; label: string }[] = [
 // Nurse logistics task types that carry clothing quantity fields
 const CLOTHES_TYPES: TaskType[] = ['clothes_refill', 'used_clothes_collection']
 
-// Task types that do NOT require a destination
+// Task types where the origin is not applicable (robot goes straight to destination)
+const NO_ORIGIN_TYPES: Set<TaskType> = new Set(['kit_delivery', 'kit_refill', 'clothes_refill'])
+
+// Task types where the destination is server-resolved — nurse does not pick it
+const AUTO_DEST_TYPES: Set<TaskType> = new Set(['kit_refill', 'clothes_refill'])
+
+// Task types that do NOT require a destination (emergency_call or auto-dest)
 const NO_DEST_REQUIRED: TaskType[] = ['emergency_call']
 
 type LocMode = 'fixed' | 'bed'
@@ -65,14 +72,17 @@ export function OrderCreate() {
     return allLocations.find((l) => l.location_code === code)?.id ?? null
   }
 
-  const showClothes = CLOTHES_TYPES.includes(taskType)
+  const showClothes  = CLOTHES_TYPES.includes(taskType)
+  const hideOrigin   = NO_ORIGIN_TYPES.has(taskType)
+  const hideDestPick = AUTO_DEST_TYPES.has(taskType)
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
     setError(null)
 
-    // Client-side validation: destination is required for all non-system task types
-    if (!NO_DEST_REQUIRED.includes(taskType) && destId === null) {
+    // Destination is required unless it's auto-resolved or the task doesn't need one
+    const destRequired = !NO_DEST_REQUIRED.includes(taskType) && !hideDestPick
+    if (destRequired && destId === null) {
       if (destMode === 'bed') {
         setError('침상 목적지를 선택하세요. (목적지 침상이 아직 선택되지 않았습니다.)')
       } else {
@@ -84,8 +94,8 @@ export function OrderCreate() {
     setSubmitting(true)
     const body: NurseOrderCreate = {
       task_type: taskType,
-      origin_location_id:      originId      ?? undefined,
-      destination_location_id: destId        ?? undefined,
+      origin_location_id:      hideOrigin   ? undefined : (originId ?? undefined),
+      destination_location_id: hideDestPick ? undefined : (destId   ?? undefined),
       note:         note        || undefined,
       order_top:    showClothes ? orderTop    : undefined,
       order_bottom: showClothes ? orderBottom : undefined,
@@ -128,47 +138,58 @@ export function OrderCreate() {
           </p>
         )}
 
-        {/* Origin Location */}
-        <fieldset style={fs}>
-          <legend style={fsLeg}>출발지 (Origin Location)</legend>
-          <div style={{ marginBottom: 8 }}>
-            <label style={{ marginRight: 16 }}>
-              <input type="radio" value="fixed" checked={originMode === 'fixed'} onChange={() => setOriginMode('fixed')} /> 고정 위치
-            </label>
-            <label>
-              <input type="radio" value="bed" checked={originMode === 'bed'} onChange={() => setOriginMode('bed')} /> 침상 (Bed)
-            </label>
-          </div>
-          {originMode === 'fixed' ? (
-            <select value={originId ?? ''} onChange={(e) => setOriginId(e.target.value ? Number(e.target.value) : null)} style={inp}>
-              <option value="">선택 안 함</option>
-              {nonBedLocations.map((l) => <option key={l.id} value={l.id}>{l.display_name}</option>)}
-            </select>
-          ) : bedMeta ? (
-            <BedSelector meta={bedMeta} onSelect={(code) => setOriginId(bedCodeToLocationId(code))} label="출발 침상" />
-          ) : <p>로딩 중...</p>}
-        </fieldset>
+        {/* Origin Location — hidden for types that go directly to destination */}
+        {!hideOrigin && (
+          <fieldset style={fs}>
+            <legend style={fsLeg}>출발지 (Origin Location)</legend>
+            <div style={{ marginBottom: 8 }}>
+              <label style={{ marginRight: 16 }}>
+                <input type="radio" value="fixed" checked={originMode === 'fixed'} onChange={() => setOriginMode('fixed')} /> 고정 위치
+              </label>
+              <label>
+                <input type="radio" value="bed" checked={originMode === 'bed'} onChange={() => setOriginMode('bed')} /> 침상 (Bed)
+              </label>
+            </div>
+            {originMode === 'fixed' ? (
+              <select value={originId ?? ''} onChange={(e) => setOriginId(e.target.value ? Number(e.target.value) : null)} style={inp}>
+                <option value="">선택 안 함</option>
+                {nonBedLocations.map((l) => <option key={l.id} value={l.id}>{l.display_name}</option>)}
+              </select>
+            ) : bedMeta ? (
+              <BedSelector meta={bedMeta} onSelect={(code) => setOriginId(bedCodeToLocationId(code))} label="출발 침상" />
+            ) : <p>로딩 중...</p>}
+          </fieldset>
+        )}
 
-        {/* Destination Location */}
-        <fieldset style={fs}>
-          <legend style={fsLeg}>목적지 (Destination Location)</legend>
-          <div style={{ marginBottom: 8 }}>
-            <label style={{ marginRight: 16 }}>
-              <input type="radio" value="fixed" checked={destMode === 'fixed'} onChange={() => setDestMode('fixed')} /> 고정 위치
-            </label>
-            <label>
-              <input type="radio" value="bed" checked={destMode === 'bed'} onChange={() => setDestMode('bed')} /> 침상 (Bed)
-            </label>
-          </div>
-          {destMode === 'fixed' ? (
-            <select value={destId ?? ''} onChange={(e) => setDestId(e.target.value ? Number(e.target.value) : null)} style={inp}>
-              <option value="">선택 안 함</option>
-              {nonBedLocations.map((l) => <option key={l.id} value={l.id}>{l.display_name}</option>)}
-            </select>
-          ) : bedMeta ? (
-            <BedSelector meta={bedMeta} onSelect={(code) => setDestId(bedCodeToLocationId(code))} label="목적지 침상" />
-          ) : <p>로딩 중...</p>}
-        </fieldset>
+        {/* Destination Location — hidden when server auto-resolves the destination */}
+        {!hideDestPick ? (
+          <fieldset style={fs}>
+            <legend style={fsLeg}>목적지 (Destination Location)</legend>
+            <div style={{ marginBottom: 8 }}>
+              <label style={{ marginRight: 16 }}>
+                <input type="radio" value="fixed" checked={destMode === 'fixed'} onChange={() => setDestMode('fixed')} /> 고정 위치
+              </label>
+              <label>
+                <input type="radio" value="bed" checked={destMode === 'bed'} onChange={() => setDestMode('bed')} /> 침상 (Bed)
+              </label>
+            </div>
+            {destMode === 'fixed' ? (
+              <select value={destId ?? ''} onChange={(e) => setDestId(e.target.value ? Number(e.target.value) : null)} style={inp}>
+                <option value="">선택 안 함</option>
+                {nonBedLocations.map((l) => <option key={l.id} value={l.id}>{l.display_name}</option>)}
+              </select>
+            ) : bedMeta ? (
+              <BedSelector meta={bedMeta} onSelect={(code) => setDestId(bedCodeToLocationId(code))} label="목적지 침상" />
+            ) : <p>로딩 중...</p>}
+          </fieldset>
+        ) : (
+          <fieldset style={{ ...fs, background: '#f8fafc' }}>
+            <legend style={fsLeg}>목적지 (Destination Location)</legend>
+            <p style={{ margin: 0, fontSize: '0.88rem', color: '#64748b' }}>
+              {taskType === 'kit_refill' ? '자동: WAREHOUSE-01 (창고)' : '자동: LAUNDRY-01 (세탁소)'}
+            </p>
+          </fieldset>
+        )}
 
         {/* Order content — clothes only */}
         {showClothes && (

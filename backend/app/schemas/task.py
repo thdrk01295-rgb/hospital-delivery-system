@@ -9,6 +9,12 @@ from app.schemas.location import LocationRead
 
 # ── Request bodies ──────────────────────────────────────────────────────────
 
+# Types that never require the nurse to supply a destination (server resolves it)
+_AUTO_DEST_TYPES: set[TaskType] = {TaskType.KIT_REFILL, TaskType.CLOTHES_REFILL}
+# Types that must never receive an origin from the nurse
+_NO_ORIGIN_TYPES: set[TaskType] = {TaskType.KIT_DELIVERY, TaskType.KIT_REFILL, TaskType.CLOTHES_REFILL}
+
+
 class NurseOrderCreate(BaseModel):
     task_type: TaskType
     origin_location_id: Optional[int] = None
@@ -26,9 +32,13 @@ class NurseOrderCreate(BaseModel):
             raise ValueError(
                 "battery_low is a system-internal task type and cannot be created manually"
             )
-        if self.task_type != TaskType.EMERGENCY_CALL:
-            if not self.destination_location_id:
-                raise ValueError("destination_location_id is required for this task type")
+        # Silently clear origin for types where it is not applicable
+        if self.task_type in _NO_ORIGIN_TYPES:
+            self.origin_location_id = None
+        # Auto-dest types (kit_refill, clothes_refill) don't need a client-supplied destination
+        dest_required = self.task_type not in _AUTO_DEST_TYPES and self.task_type != TaskType.EMERGENCY_CALL
+        if dest_required and not self.destination_location_id:
+            raise ValueError("destination_location_id is required for this task type")
         return self
 
 

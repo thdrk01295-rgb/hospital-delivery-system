@@ -35,6 +35,7 @@ class TaskType(str, Enum):
     # Nurse-initiated
     CLOTHES_REFILL = "clothes_refill"
     KIT_DELIVERY = "kit_delivery"
+    KIT_REFILL = "kit_refill"
     SPECIMEN_DELIVERY = "specimen_delivery"
     LOGISTICS_DELIVERY = "logistics_delivery"
     USED_CLOTHES_COLLECTION = "used_clothes_collection"
@@ -69,6 +70,7 @@ TASK_PRIORITY: dict[str, int] = {
     TaskType.KIT_DELIVERY:             3,
     TaskType.LOGISTICS_DELIVERY:       4,
     TaskType.CLOTHES_REFILL:           5,
+    TaskType.KIT_REFILL:               5,
     TaskType.PATIENT_CLOTHES_RENTAL:   6,
     TaskType.PATIENT_CLOTHES_RETURN:   6,
     TaskType.USED_CLOTHES_COLLECTION:  7,

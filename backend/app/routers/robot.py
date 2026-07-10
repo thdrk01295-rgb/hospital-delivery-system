@@ -141,7 +141,7 @@ async def complete_task_from_tablet(
     from app.websocket.manager import ws_manager
     from app.constants import ws_events
     from app.schemas.task import TaskRead
-    from app.services.task_service import update_task_status
+    from app.services.task_service import finalize_task_complete
 
     robot = db.query(RobotModel).filter(RobotModel.robot_code == body.robot_id).first()
     if not robot:
@@ -215,7 +215,7 @@ async def complete_task_from_tablet(
 
     else:
         # ── Destination stop complete (final) ─────────────────────────────────
-        task = update_task_status(db, active_task.id, TaskStatus.COMPLETE)
+        task = finalize_task_complete(db, active_task.id, robot_id=robot.id)
         task_dict = TaskRead.model_validate(task).model_dump(mode="json")
         await ws_manager.broadcast(ws_events.TASK_STATUS_UPDATE, task_dict)
 

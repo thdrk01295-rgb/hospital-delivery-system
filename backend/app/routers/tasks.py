@@ -15,6 +15,7 @@ from app.services.task_service import (
     create_emergency_task,
     update_task_status,
     requeue_task,
+    finalize_task_complete,
 )
 from app.services.abnormal_event_service import open_event, resolve_all_by_type
 from app.services.auth_service import decode_token
@@ -252,13 +253,14 @@ async def patient_complete_task(
 
     # Resolve robot_code before committing
     robot_code = "AMR-001"
-    if task.assigned_robot_id:
+    robot_db_id = task.assigned_robot_id
+    if robot_db_id:
         from app.models.robot import Robot as RobotModel
-        r = db.query(RobotModel).filter(RobotModel.id == task.assigned_robot_id).first()
+        r = db.query(RobotModel).filter(RobotModel.id == robot_db_id).first()
         if r:
             robot_code = r.robot_code
 
-    task = update_task_status(db, task_id, TaskStatus.COMPLETE)
+    task = finalize_task_complete(db, task_id, robot_id=robot_db_id)
     task_dict = TaskRead.model_validate(task).model_dump(mode="json")
     await ws_manager.broadcast(ws_events.TASK_STATUS_UPDATE, task_dict)
 

@@ -385,7 +385,7 @@ def _handle_low_battery(db, robot) -> None:
     return_task = Task(
         task_type=TaskType.BATTERY_LOW,
         destination_location_id=station.id,
-        origin_location_id=robot.current_location_id,
+        origin_location_id=None,
         requested_by_role=RequestedByRole.SYSTEM,
         priority=Task.resolve_priority(TaskType.BATTERY_LOW),
         status=TaskStatus.DISPATCHED,
@@ -396,12 +396,11 @@ def _handle_low_battery(db, robot) -> None:
     db.commit()
     db.refresh(return_task)
 
-    origin_code = return_task.origin_location.location_code if return_task.origin_location else None
     assign_payload = {
         "robot_id": robot.robot_code,
         "task_id": return_task.id,
         "task_type": return_task.task_type,
-        "origin": origin_code,
+        "origin": None,
         "destination": station.location_code,
         "priority": return_task.priority,
     }
@@ -586,12 +585,12 @@ def _handle_lock_status(raw: dict) -> None:
 def _handle_task_complete(raw: dict) -> None:
     """
     Handles robot/task_complete:
-      1. Mark task COMPLETE in DB.
+      1. Mark task COMPLETE and update robot inventory atomically.
       2. Infer robot current location from the completed task's destination.
       3. Broadcast task_status_update and robot_location_update (if location changed).
     """
     from app.db.session import SessionLocal
-    from app.services.task_service import update_task_status
+    from app.services.task_service import finalize_task_complete
     from app.services.robot_service import get_or_create_robot, get_robot_status_dict
     from app.schemas.task import TaskRead
     from app.websocket.manager import ws_manager
@@ -599,7 +598,8 @@ def _handle_task_complete(raw: dict) -> None:
     data = MqttTaskCompletePayload(**raw)
     db = SessionLocal()
     try:
-        task = update_task_status(db, data.task_id, TaskStatus.COMPLETE)
+        robot = get_or_create_robot(db, data.robot_id)
+        task = finalize_task_complete(db, data.task_id, robot_id=robot.id)
         if not task:
             logger.warning(f"robot/task_complete: task {data.task_id} not found")
             return
@@ -611,7 +611,6 @@ def _handle_task_complete(raw: dict) -> None:
 
         # Infer robot current location from the completed task's destination
         if task.destination_location_id:
-            robot = get_or_create_robot(db, data.robot_id)
             if robot.current_location_id != task.destination_location_id:
                 robot.current_location_id = task.destination_location_id
                 robot.last_seen_at = datetime.now(timezone.utc)

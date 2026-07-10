@@ -37,6 +37,9 @@ class Robot(Base):
     tasks: Mapped[list["Task"]] = relationship(  # noqa: F821
         "Task", back_populates="assigned_robot"
     )
+    inventory: Mapped[Optional["RobotInventory"]] = relationship(  # noqa: F821
+        "RobotInventory", back_populates="robot", uselist=False
+    )
 
     def is_available(self) -> bool:
         """True when the robot can accept a new task dispatch."""

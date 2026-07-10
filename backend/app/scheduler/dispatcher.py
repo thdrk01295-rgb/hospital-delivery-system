@@ -7,7 +7,7 @@ Priority rules (lower number = higher priority):
   2 — specimen_delivery
   3 — kit_delivery
   4 — logistics_delivery
-  5 — clothes_refill
+  5 — clothes_refill, kit_refill
   6 — patient clothes rental / return
   7 — used_clothes_collection
 """
@@ -190,29 +190,37 @@ def _check_clean_clothes_threshold(db: Session, threshold: int) -> None:
     from app.constants.enums import TaskType, TaskStatus, RequestedByRole
     from app.models.location import Location
 
-    low_stock = (
+    has_low_stock = (
         db.query(ClothingInventory)
         .filter(ClothingInventory.clean_count <= threshold)
-        .all()
-    )
-    for inv in low_stock:
-        existing = (
-            db.query(Task)
-            .filter(
-                Task.task_type == TaskType.CLOTHES_REFILL,
-                Task.destination_location_id == inv.location_id,
-                Task.status.in_([TaskStatus.PENDING, TaskStatus.DISPATCHED, TaskStatus.IN_PROGRESS]),
-            )
-            .first()
+        .first()
+    ) is not None
+
+    if not has_low_stock:
+        return
+
+    existing = (
+        db.query(Task)
+        .filter(
+            Task.task_type == TaskType.CLOTHES_REFILL,
+            Task.status.in_([TaskStatus.PENDING, TaskStatus.DISPATCHED, TaskStatus.IN_PROGRESS]),
         )
-        if not existing:
-            task = Task(
-                task_type=TaskType.CLOTHES_REFILL,
-                destination_location_id=inv.location_id,
-                requested_by_role=RequestedByRole.SYSTEM,
-                priority=Task.resolve_priority(TaskType.CLOTHES_REFILL),
-                status=TaskStatus.PENDING,
-                note=f"Auto-triggered: clean_count={inv.clean_count}",
-            )
-            db.add(task)
+        .first()
+    )
+    if existing:
+        return
+
+    laundry = db.query(Location).filter(Location.location_code == "LAUNDRY-01").first()
+    if not laundry:
+        return
+
+    task = Task(
+        task_type=TaskType.CLOTHES_REFILL,
+        destination_location_id=laundry.id,
+        requested_by_role=RequestedByRole.SYSTEM,
+        priority=Task.resolve_priority(TaskType.CLOTHES_REFILL),
+        status=TaskStatus.PENDING,
+        note="Auto-triggered: low clean clothes stock",
+    )
+    db.add(task)
     db.commit()

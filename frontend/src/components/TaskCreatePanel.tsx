@@ -7,12 +7,15 @@ import type { Location, BedSelectorMeta, NurseOrderCreate, TaskType } from '@/ty
 const ORDER_TYPES: { value: TaskType; label: string }[] = [
   { value: 'clothes_refill',          label: '의류 보충' },
   { value: 'kit_delivery',            label: '키트 배송' },
+  { value: 'kit_refill',              label: '키트 보충' },
   { value: 'specimen_delivery',       label: '검체 배송' },
   { value: 'logistics_delivery',      label: '물류 배송' },
   { value: 'used_clothes_collection', label: '사용 의류 수거' },
 ]
 
 const CLOTHES_TYPES: TaskType[] = ['clothes_refill', 'used_clothes_collection']
+const NO_ORIGIN_TYPES: Set<TaskType> = new Set(['kit_delivery', 'kit_refill', 'clothes_refill'])
+const AUTO_DEST_TYPES: Set<TaskType> = new Set(['kit_refill', 'clothes_refill'])
 type LocMode = 'fixed' | 'bed'
 
 export function TaskCreatePanel() {
@@ -46,7 +49,9 @@ export function TaskCreatePanel() {
     return allLocations.find((l) => l.location_code === code)?.id ?? null
   }
 
-  const showClothes = CLOTHES_TYPES.includes(taskType)
+  const showClothes  = CLOTHES_TYPES.includes(taskType)
+  const hideOrigin   = NO_ORIGIN_TYPES.has(taskType)
+  const hideDestPick = AUTO_DEST_TYPES.has(taskType)
 
   function resetForm() {
     setTaskType('kit_delivery')
@@ -60,15 +65,15 @@ export function TaskCreatePanel() {
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
     setError(null)
-    if (destId === null) {
+    if (!hideDestPick && destId === null) {
       setError('목적지를 선택하세요.')
       return
     }
     setSubmitting(true)
     const body: NurseOrderCreate = {
       task_type:               taskType,
-      origin_location_id:      originId      ?? undefined,
-      destination_location_id: destId        ?? undefined,
+      origin_location_id:      hideOrigin   ? undefined : (originId ?? undefined),
+      destination_location_id: hideDestPick ? undefined : (destId   ?? undefined),
       note:                    note          || undefined,
       order_top:     showClothes ? orderTop     : undefined,
       order_bottom:  showClothes ? orderBottom  : undefined,
@@ -109,37 +114,48 @@ export function TaskCreatePanel() {
             </select>
           </label>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
-            <span style={lbl}>출발지</span>
-            <div style={{ display: 'flex', gap: '0.9rem', fontSize: '0.8rem', color: '#475569', marginBottom: 3 }}>
-              <label><input type="radio" value="fixed" checked={originMode === 'fixed'} onChange={() => setOriginMode('fixed')} /> 고정</label>
-              <label><input type="radio" value="bed"   checked={originMode === 'bed'}   onChange={() => setOriginMode('bed')}   /> 침상</label>
+          {!hideOrigin && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+              <span style={lbl}>출발지</span>
+              <div style={{ display: 'flex', gap: '0.9rem', fontSize: '0.8rem', color: '#475569', marginBottom: 3 }}>
+                <label><input type="radio" value="fixed" checked={originMode === 'fixed'} onChange={() => setOriginMode('fixed')} /> 고정</label>
+                <label><input type="radio" value="bed"   checked={originMode === 'bed'}   onChange={() => setOriginMode('bed')}   /> 침상</label>
+              </div>
+              {originMode === 'fixed' ? (
+                <select value={originId ?? ''} onChange={(e) => setOriginId(e.target.value ? Number(e.target.value) : null)} style={sel}>
+                  <option value="">선택 안 함</option>
+                  {nonBedLocations.map((l) => <option key={l.id} value={l.id}>{l.display_name}</option>)}
+                </select>
+              ) : bedMeta ? (
+                <BedSelector meta={bedMeta} onSelect={(code) => setOriginId(bedCodeToId(code))} label="출발 침상" />
+              ) : <span style={{ fontSize: '0.8rem', color: '#94a3b8' }}>로딩 중...</span>}
             </div>
-            {originMode === 'fixed' ? (
-              <select value={originId ?? ''} onChange={(e) => setOriginId(e.target.value ? Number(e.target.value) : null)} style={sel}>
-                <option value="">선택 안 함</option>
-                {nonBedLocations.map((l) => <option key={l.id} value={l.id}>{l.display_name}</option>)}
-              </select>
-            ) : bedMeta ? (
-              <BedSelector meta={bedMeta} onSelect={(code) => setOriginId(bedCodeToId(code))} label="출발 침상" />
-            ) : <span style={{ fontSize: '0.8rem', color: '#94a3b8' }}>로딩 중...</span>}
-          </div>
+          )}
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
-            <span style={lbl}>목적지</span>
-            <div style={{ display: 'flex', gap: '0.9rem', fontSize: '0.8rem', color: '#475569', marginBottom: 3 }}>
-              <label><input type="radio" value="fixed" checked={destMode === 'fixed'} onChange={() => setDestMode('fixed')} /> 고정</label>
-              <label><input type="radio" value="bed"   checked={destMode === 'bed'}   onChange={() => setDestMode('bed')}   /> 침상</label>
+          {!hideDestPick ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+              <span style={lbl}>목적지</span>
+              <div style={{ display: 'flex', gap: '0.9rem', fontSize: '0.8rem', color: '#475569', marginBottom: 3 }}>
+                <label><input type="radio" value="fixed" checked={destMode === 'fixed'} onChange={() => setDestMode('fixed')} /> 고정</label>
+                <label><input type="radio" value="bed"   checked={destMode === 'bed'}   onChange={() => setDestMode('bed')}   /> 침상</label>
+              </div>
+              {destMode === 'fixed' ? (
+                <select value={destId ?? ''} onChange={(e) => setDestId(e.target.value ? Number(e.target.value) : null)} style={sel}>
+                  <option value="">선택 안 함</option>
+                  {nonBedLocations.map((l) => <option key={l.id} value={l.id}>{l.display_name}</option>)}
+                </select>
+              ) : bedMeta ? (
+                <BedSelector meta={bedMeta} onSelect={(code) => setDestId(bedCodeToId(code))} label="목적지 침상" />
+              ) : <span style={{ fontSize: '0.8rem', color: '#94a3b8' }}>로딩 중...</span>}
             </div>
-            {destMode === 'fixed' ? (
-              <select value={destId ?? ''} onChange={(e) => setDestId(e.target.value ? Number(e.target.value) : null)} style={sel}>
-                <option value="">선택 안 함</option>
-                {nonBedLocations.map((l) => <option key={l.id} value={l.id}>{l.display_name}</option>)}
-              </select>
-            ) : bedMeta ? (
-              <BedSelector meta={bedMeta} onSelect={(code) => setDestId(bedCodeToId(code))} label="목적지 침상" />
-            ) : <span style={{ fontSize: '0.8rem', color: '#94a3b8' }}>로딩 중...</span>}
-          </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+              <span style={lbl}>목적지</span>
+              <span style={{ fontSize: '0.8rem', color: '#64748b', padding: '0.35rem 0.5rem', background: '#f1f5f9', borderRadius: 5 }}>
+                {taskType === 'kit_refill' ? '자동: WAREHOUSE-01 (창고)' : '자동: LAUNDRY-01 (세탁소)'}
+              </span>
+            </div>
+          )}
 
           {showClothes && (
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>

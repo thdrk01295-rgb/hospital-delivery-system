@@ -65,6 +65,7 @@ export interface BedSelectorMeta {
 export type TaskType =
   | 'clothes_refill'
   | 'kit_delivery'
+  | 'kit_refill'
   | 'specimen_delivery'
   | 'logistics_delivery'
   | 'used_clothes_collection'
