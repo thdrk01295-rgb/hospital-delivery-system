@@ -16,7 +16,7 @@ import { useEffect, useState }        from 'react'
 import { Link, useNavigate }           from 'react-router-dom'
 import { fetchRobotStatus }            from '@/api/robot'
 import { fetchOngoingTasks, fetchCompletedTasks, cancelNurseTask } from '@/api/tasks'
-import { fetchInventory, fetchRobotInventory } from '@/api/inventory'
+import { fetchRobotInventory } from '@/api/inventory'
 import { fetchActiveAbnormalEvent }    from '@/api/abnormalEvents'
 import { useRobotStore }               from '@/store/robotStore'
 import { useTaskStore }                from '@/store/taskStore'
@@ -25,7 +25,6 @@ import { useAbnormalEventStore }       from '@/store/abnormalEventStore'
 import { useAuthStore }                from '@/store/authStore'
 import { RobotStatusBanner }           from '@/components/RobotStatusBanner'
 import { TaskCard }                    from '@/components/TaskCard'
-import { InventoryTable }              from '@/components/InventoryTable'
 import { EmergencyStopButton }         from '@/components/EmergencyStopButton'
 import { SystemStatusCard }            from '@/components/SystemStatusCard'
 import { TaskCreatePanel }             from '@/components/TaskCreatePanel'
@@ -38,7 +37,7 @@ export function NurseDashboard() {
 
   const { robot, setRobot }                                                   = useRobotStore()
   const { ongoingTasks, completedTasks, setOngoingTasks, setCompletedTasks, applyTaskUpdate } = useTaskStore()
-  const { items: inventory, robotInventory, setItems, setRobotInventory }    = useInventoryStore()
+  const { robotInventory, setRobotInventory } = useInventoryStore()
   const { setActiveEvent }                                                    = useAbnormalEventStore()
   const [now, setNow]                                                         = useState(new Date())
 
@@ -52,14 +51,12 @@ export function NurseDashboard() {
       fetchRobotStatus(),
       fetchOngoingTasks(),
       fetchCompletedTasks(),
-      fetchInventory(),
       fetchActiveAbnormalEvent(),
       fetchRobotInventory().catch(() => null),
-    ]).then(([robotData, ongoing, completed, inv, abnormal, robotInv]) => {
+    ]).then(([robotData, ongoing, completed, abnormal, robotInv]) => {
       setRobot(robotData)
       setOngoingTasks(ongoing)
       setCompletedTasks(completed)
-      setItems(inv)
       setActiveEvent(abnormal)
       if (robotInv) setRobotInventory(robotInv)
     }).catch(console.error)
@@ -116,11 +113,6 @@ export function NurseDashboard() {
         {/* Left sidebar */}
         <aside style={sidebar}>
           <SystemStatusCard robot={robot} />
-
-          <div style={card}>
-            <div style={sectionLabel}>재고 현황</div>
-            <InventoryTable items={inventory} />
-          </div>
 
           <div style={card}>
             <div style={{ ...sectionLabel, marginBottom: '0.6rem' }}>로봇 탑재 재고</div>
