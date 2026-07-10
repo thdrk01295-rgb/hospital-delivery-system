@@ -160,15 +160,17 @@ def finalize_task_complete(db: Session, task_id: int,
     """
     from app.services.robot_inventory_service import (
         apply_inventory_effect_for_completed_task,
-        get_or_create_robot_inventory,
+        _lock_robot_inventory,
     )
-    from app.models.robot_inventory import RobotInventory
 
-    # Step 1: acquire write lock on the Task row
+    # Step 1: acquire UPDLOCK + ROWLOCK on the Task row (MSSQL).
+    # SQLAlchemy .with_for_update() emits no locking clause on the MSSQL dialect;
+    # WITH (UPDLOCK, ROWLOCK) must be supplied as an explicit table hint.
+    # On SQLite (tests) the hint is silently suppressed.
     task = (
         db.query(Task)
+        .with_hint(Task, "WITH (UPDLOCK, ROWLOCK)", dialect_name="mssql")
         .filter(Task.id == task_id)
-        .with_for_update()
         .first()
     )
     if not task:
@@ -185,13 +187,11 @@ def finalize_task_complete(db: Session, task_id: int,
         )
         return task
 
-    # Step 3: acquire write lock on the RobotInventory row (ensures serialization
-    # with concurrent validate_inventory_for_task_creation callers)
+    # Step 3: acquire UPDLOCK + ROWLOCK on the RobotInventory row.
+    # Lock order: Task row first (Step 1), then RobotInventory row (here).
+    # Reversing this order in any other caller would risk deadlock.
     if robot_id is not None:
-        get_or_create_robot_inventory(db, robot_id)   # ensure the row exists
-        db.query(RobotInventory).filter(
-            RobotInventory.robot_id == robot_id
-        ).with_for_update().first()
+        _lock_robot_inventory(db, robot_id)
 
     # Steps 4–7: apply mutations in memory (single commit below)
     task.status = TaskStatus.COMPLETE

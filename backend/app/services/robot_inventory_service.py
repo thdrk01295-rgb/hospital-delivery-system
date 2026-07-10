@@ -12,6 +12,7 @@ import logging
 from typing import Optional
 
 from fastapi import HTTPException, status
+from sqlalchemy import exc as sa_exc
 from sqlalchemy.orm import Session
 
 from app.models.robot_inventory import (
@@ -28,6 +29,13 @@ logger = logging.getLogger(__name__)
 # Statuses that mean a task holds a reservation on inventory
 _ACTIVE_STATUSES = (TaskStatus.PENDING, TaskStatus.DISPATCHED, TaskStatus.IN_PROGRESS)
 
+# MSSQL table hint used for serializable row-level locking.
+# SQLAlchemy's .with_for_update() emits no locking clause on the MSSQL dialect
+# (SQL Server does not support SELECT ... FOR UPDATE).  The hint below compiles
+# to `FROM robot_inventories WITH (UPDLOCK, ROWLOCK)` on MSSQL and is silently
+# suppressed on all other dialects (SQLite in tests, PostgreSQL if ever used).
+_MSSQL_UPDLOCK = "WITH (UPDLOCK, ROWLOCK)"
+
 
 def get_or_create_robot_inventory(db: Session, robot_id: int) -> RobotInventory:
     inv = db.query(RobotInventory).filter(RobotInventory.robot_id == robot_id).first()
@@ -41,6 +49,61 @@ def get_or_create_robot_inventory(db: Session, robot_id: int) -> RobotInventory:
         db.add(inv)
         db.flush()
         logger.info(f"[inventory] Created RobotInventory for robot_id={robot_id} (seeded to capacity)")
+    return inv
+
+
+def _lock_robot_inventory(db: Session, robot_id: int) -> RobotInventory:
+    """
+    Acquire an MSSQL write lock (UPDLOCK + ROWLOCK) on the RobotInventory row
+    for *robot_id*, creating it first if it does not yet exist.
+
+    Lock order contract: callers must have already locked the Task row (or hold
+    no Task lock) before calling this function.  Task → RobotInventory is the
+    global lock order; reversing it risks deadlock.
+
+    Creation race: two concurrent requests may both find no row and attempt to
+    INSERT simultaneously.  The second INSERT raises IntegrityError (UNIQUE on
+    robot_id).  This is handled inside a savepoint so that only the nested
+    transaction rolls back; the outer transaction is preserved.  After a race
+    the winner's newly-inserted row is re-fetched with the UPDLOCK hint.
+
+    On SQLite (test environment): the WITH (UPDLOCK, ROWLOCK) hint is silently
+    suppressed by SQLAlchemy, so this function degrades to a plain SELECT.
+    """
+    # Fast path: try to acquire lock on existing row
+    inv = (
+        db.query(RobotInventory)
+        .with_hint(RobotInventory, _MSSQL_UPDLOCK, dialect_name="mssql")
+        .filter(RobotInventory.robot_id == robot_id)
+        .first()
+    )
+    if inv:
+        return inv
+
+    # Row does not exist yet — create it inside a savepoint so that an
+    # IntegrityError from a concurrent INSERT does not corrupt the outer txn.
+    try:
+        with db.begin_nested():
+            inv = RobotInventory(
+                robot_id=robot_id,
+                kit_count=ROBOT_KIT_CAPACITY,
+                clothes_top_count=ROBOT_CLOTHES_TOP_CAPACITY,
+                clothes_bottom_count=ROBOT_CLOTHES_BOTTOM_CAPACITY,
+            )
+            db.add(inv)
+            db.flush()
+            logger.info(f"[inventory] Created RobotInventory for robot_id={robot_id} (seeded to capacity)")
+    except sa_exc.IntegrityError:
+        # Another concurrent request won the INSERT race; roll back only the
+        # savepoint and re-fetch the row that the winner committed.
+        logger.info(f"[inventory] race on robot_id={robot_id}: concurrent INSERT detected, re-fetching")
+        inv = (
+            db.query(RobotInventory)
+            .with_hint(RobotInventory, _MSSQL_UPDLOCK, dialect_name="mssql")
+            .filter(RobotInventory.robot_id == robot_id)
+            .first()
+        )
+
     return inv
 
 
@@ -60,23 +123,15 @@ def validate_inventory_for_task_creation(
     All other task types pass through without a check.
 
     Concurrency: for inventory-consuming types the robot_inventories row is
-    loaded with a write lock (WITH UPDLOCK on MSSQL) before counting reservations.
+    locked with UPDLOCK + ROWLOCK (on MSSQL) before counting reservations.
     The lock is held until the caller's db.commit(), preventing two simultaneous
     requests from over-allocating the same last inventory unit.
     """
     if task_type not in (TaskType.KIT_DELIVERY, TaskType.PATIENT_CLOTHES_RENTAL):
         return
 
-    # Ensure the row exists (creates it if missing, with a plain SELECT first)
-    get_or_create_robot_inventory(db, robot_id)
-
-    # Re-acquire with a write lock so the reservation count is stable until commit
-    inv = (
-        db.query(RobotInventory)
-        .filter(RobotInventory.robot_id == robot_id)
-        .with_for_update()
-        .first()
-    )
+    # Acquire UPDLOCK on the inventory row (creates it if missing; handles race).
+    inv = _lock_robot_inventory(db, robot_id)
 
     if task_type == TaskType.KIT_DELIVERY:
         reserved = (

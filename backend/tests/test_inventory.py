@@ -17,6 +17,7 @@ from app.services.robot_inventory_service import (
     get_or_create_robot_inventory,
     validate_inventory_for_task_creation,
     apply_inventory_effect_for_completed_task,
+    _MSSQL_UPDLOCK,
 )
 from app.services.task_service import finalize_task_complete
 
@@ -445,3 +446,95 @@ def test_finalize_second_call_after_commit_is_no_op(db, robot_row, inv):
     assert result1.id == result2.id
     assert result1.inventory_applied is True
     assert kit_after_first == kit_after_second  # no double-deduction
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MSSQL locking — SQL compilation verification
+#
+# These tests compile the locking queries using the SQLAlchemy MSSQL dialect
+# and assert that the generated SQL contains the required table hints.
+# No live MSSQL connection is needed: SQLAlchemy compiles the query to a SQL
+# string using the dialect object alone.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _compile_mssql(query) -> str:
+    """Compile a SQLAlchemy Query/Select to a SQL string using the MSSQL dialect."""
+    from sqlalchemy.dialects import mssql as mssql_dialect
+    dialect = mssql_dialect.dialect()
+    # Legacy Query objects expose .statement; core Select objects compile directly.
+    stmt = query.statement if hasattr(query, "statement") else query
+    return str(stmt.compile(dialect=dialect, compile_kwargs={"literal_binds": False}))
+
+
+def test_mssql_task_lock_hint_compiles_correctly(engine):
+    """
+    TC-MSSQL-01: The Task lock query used by finalize_task_complete must compile
+    to SQL that contains FROM tasks WITH (UPDLOCK, ROWLOCK) on the MSSQL dialect.
+    """
+    from sqlalchemy.orm import sessionmaker
+    Session = sessionmaker(bind=engine)
+    session = Session()
+    try:
+        q = (
+            session.query(Task)
+            .with_hint(Task, "WITH (UPDLOCK, ROWLOCK)", dialect_name="mssql")
+            .filter(Task.id == 1)
+        )
+        sql = _compile_mssql(q)
+    finally:
+        session.close()
+
+    assert "UPDLOCK" in sql, f"Expected UPDLOCK in SQL, got:\n{sql}"
+    assert "ROWLOCK" in sql, f"Expected ROWLOCK in SQL, got:\n{sql}"
+    assert "tasks WITH (UPDLOCK, ROWLOCK)" in sql, (
+        f"Expected 'tasks WITH (UPDLOCK, ROWLOCK)' in SQL, got:\n{sql}"
+    )
+
+
+def test_mssql_robot_inventory_lock_hint_compiles_correctly(engine):
+    """
+    TC-MSSQL-02: The RobotInventory lock query used by _lock_robot_inventory must
+    compile to SQL that contains FROM robot_inventories WITH (UPDLOCK, ROWLOCK)
+    on the MSSQL dialect.
+    """
+    from sqlalchemy.orm import sessionmaker
+    Session = sessionmaker(bind=engine)
+    session = Session()
+    try:
+        q = (
+            session.query(RobotInventory)
+            .with_hint(RobotInventory, _MSSQL_UPDLOCK, dialect_name="mssql")
+            .filter(RobotInventory.robot_id == 1)
+        )
+        sql = _compile_mssql(q)
+    finally:
+        session.close()
+
+    assert "UPDLOCK" in sql, f"Expected UPDLOCK in SQL, got:\n{sql}"
+    assert "ROWLOCK" in sql, f"Expected ROWLOCK in SQL, got:\n{sql}"
+    assert "robot_inventories WITH (UPDLOCK, ROWLOCK)" in sql, (
+        f"Expected 'robot_inventories WITH (UPDLOCK, ROWLOCK)' in SQL, got:\n{sql}"
+    )
+
+
+def test_mssql_with_for_update_generates_no_lock_hint(engine):
+    """
+    TC-MSSQL-03: Confirms that .with_for_update() emits NO locking clause on
+    the MSSQL dialect — proving that the old implementation was broken and that
+    the WITH (UPDLOCK, ROWLOCK) hint replacement is necessary.
+    """
+    from sqlalchemy.orm import sessionmaker
+    Session = sessionmaker(bind=engine)
+    session = Session()
+    try:
+        q = session.query(Task).filter(Task.id == 1).with_for_update()
+        sql = _compile_mssql(q)
+    finally:
+        session.close()
+
+    assert "UPDLOCK" not in sql, (
+        f"with_for_update() unexpectedly generated UPDLOCK on MSSQL:\n{sql}"
+    )
+    assert "WITH (" not in sql, (
+        f"with_for_update() unexpectedly generated a WITH hint on MSSQL:\n{sql}"
+    )
