@@ -1,0 +1,13 @@
+int64 task_id
+string task_type
+string stop_type
+string phase
+int32 order_top
+int32 order_bottom
+---
+bool success
+string message
+---
+string current_command
+int32 current_step
+int32 total_steps

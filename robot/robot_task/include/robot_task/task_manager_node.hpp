@@ -18,6 +18,8 @@
 #include <memory>
 #include <mutex>
 
+#include <nlohmann/json.hpp>
+
 #include "rclcpp/rclcpp.hpp"
 #include "geometry_msgs/msg/twist.hpp"
 #include "std_msgs/msg/string.hpp"
@@ -51,6 +53,8 @@ struct ActiveTask
   std::string origin;       // may be empty if null
   std::string destination;
   int         priority;
+  std::optional<int> order_top;
+  std::optional<int> order_bottom;
 };
 
 // ────────────────────────────────────────────────────────────
@@ -155,6 +159,12 @@ private:
   bool is_battery_low_task() const;
   bool requires_task_finish(const ActiveTask & task) const;
   bool is_supported_task_type(const std::string & task_type) const;
+  bool is_originless_task_type(const std::string & task_type) const;
+  std::optional<int> parse_order_selection(
+    const nlohmann::json & payload,
+    const char * field,
+    bool & valid,
+    std::string & error_message) const;
 
   static std::string state_to_string(TaskState s);
   std::string state_to_robot_state(TaskState s) const;

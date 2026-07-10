@@ -1,0 +1,31 @@
+task_motor_sequence_node:
+  ros__parameters:
+    motor_ready_topic: /control/motor_ready
+    motor_service_name: /control/motor_command
+    motor_ready_timeout_sec: 2.0
+
+    lift_level_1_command: "1l"
+    lift_level_2_command: "2l"
+    lift_level_3_command: "3l"
+    lift_top_command: "tl"
+    lift_stop_command: "k"
+
+    clothes_step_forward_command: "w"
+    kit_step_forward_command: "r"
+
+    servo_1_release_command: ""
+    servo_1_lock_command: ""
+    servo_2_release_command: ""
+    servo_2_lock_command: ""
+    servo_3_release_command: ""
+    servo_3_lock_command: ""
+    servo_4_release_command: ""
+    servo_4_lock_command: ""
+    servo_5_release_command: ""
+    servo_5_lock_command: ""
+
+    door_open_command: ""
+    door_close_command: ""
+
+    lift_home_command: ""
+    reset_command: ""

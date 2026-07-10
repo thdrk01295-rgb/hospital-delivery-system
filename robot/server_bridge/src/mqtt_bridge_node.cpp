@@ -134,6 +134,38 @@ bool requireOptionalStringField(
   return true;
 }
 
+bool requireOptionalNullableStringField(
+  const rclcpp::Logger & logger,
+  const std::string & source,
+  const json & payload,
+  const char * field)
+{
+  if (!payload.contains(field)) {
+    return true;
+  }
+  if (!payload[field].is_null() && !payload[field].is_string()) {
+    RCLCPP_ERROR(logger, "%s payload %s must be a string or null", source.c_str(), field);
+    return false;
+  }
+  return true;
+}
+
+bool requireOptionalIntegerOrNullField(
+  const rclcpp::Logger & logger,
+  const std::string & source,
+  const json & payload,
+  const char * field)
+{
+  if (!payload.contains(field) || payload[field].is_null()) {
+    return true;
+  }
+  if (!isInteger(payload[field])) {
+    RCLCPP_ERROR(logger, "%s payload %s must be an integer or null", source.c_str(), field);
+    return false;
+  }
+  return true;
+}
+
 bool requireBooleanField(
   const rclcpp::Logger & logger,
   const std::string & source,
@@ -146,23 +178,6 @@ bool requireBooleanField(
   }
   if (!payload[field].is_boolean()) {
     RCLCPP_ERROR(logger, "%s payload %s must be a boolean", source.c_str(), field);
-    return false;
-  }
-  return true;
-}
-
-bool requireNullableStringField(
-  const rclcpp::Logger & logger,
-  const std::string & source,
-  const json & payload,
-  const char * field)
-{
-  if (!payload.contains(field)) {
-    RCLCPP_ERROR(logger, "%s payload missing required %s", source.c_str(), field);
-    return false;
-  }
-  if (!payload[field].is_null() && !payload[field].is_string()) {
-    RCLCPP_ERROR(logger, "%s payload %s must be a string or null", source.c_str(), field);
     return false;
   }
   return true;
@@ -338,9 +353,11 @@ void MqttBridgeNode::onMqttMessage(const std::string & t, const std::string & pa
   if (t == topic::TASK_ASSIGN) {
     if (!requireIntegerField(get_logger(), t, parsed, "task_id") ||
       !requireStringField(get_logger(), t, parsed, "task_type") ||
-      !requireNullableStringField(get_logger(), t, parsed, "origin") ||
+      !requireOptionalNullableStringField(get_logger(), t, parsed, "origin") ||
       !requireNonEmptyStringField(get_logger(), t, parsed, "destination") ||
-      !requireIntegerField(get_logger(), t, parsed, "priority"))
+      !requireIntegerField(get_logger(), t, parsed, "priority") ||
+      !requireOptionalIntegerOrNullField(get_logger(), t, parsed, "order_top") ||
+      !requireOptionalIntegerOrNullField(get_logger(), t, parsed, "order_bottom"))
     {
       return;
     }

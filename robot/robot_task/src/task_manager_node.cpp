@@ -123,6 +123,11 @@ void TaskManagerNode::on_task_assign(const std_msgs::msg::String::SharedPtr msg)
   try {
     json j = json::parse(msg->data);
     if (j.contains("robot_id") && !j["robot_id"].is_null()) {
+      if (!j["robot_id"].is_string()) {
+        RCLCPP_ERROR(get_logger(), "task_assign robot_id must be a string");
+        publish_error("task_assign robot_id must be a string");
+        return;
+      }
       const auto incoming_robot_id = j["robot_id"].get<std::string>();
       if (incoming_robot_id != robot_id_) {
         RCLCPP_WARN(get_logger(),
@@ -136,6 +141,23 @@ void TaskManagerNode::on_task_assign(const std_msgs::msg::String::SharedPtr msg)
       publish_error("task_assign task_id must be an integer");
       return;
     }
+    if (!j.contains("task_type") || !j["task_type"].is_string()) {
+      RCLCPP_ERROR(get_logger(), "task_assign task_type must be a string");
+      publish_error("task_assign task_type must be a string");
+      return;
+    }
+    if (j.contains("origin") && !j["origin"].is_null() && !j["origin"].is_string()) {
+      RCLCPP_ERROR(get_logger(), "task_assign origin must be a string or null");
+      publish_error("task_assign origin must be a string or null");
+      return;
+    }
+    if (j.contains("destination") && !j["destination"].is_null() &&
+      !j["destination"].is_string())
+    {
+      RCLCPP_ERROR(get_logger(), "task_assign destination must be a string or null");
+      publish_error("task_assign destination must be a string or null");
+      return;
+    }
     task.task_id    = j.at("task_id").get<int>();
     task.task_type  = j.at("task_type").get<std::string>();
     task.priority   = j.value("priority", 0);
@@ -145,6 +167,21 @@ void TaskManagerNode::on_task_assign(const std_msgs::msg::String::SharedPtr msg)
       "" : j["origin"].get<std::string>();
     task.destination = (!j.contains("destination") || j["destination"].is_null()) ?
       "" : j["destination"].get<std::string>();
+
+    bool order_valid = true;
+    std::string order_error;
+    task.order_top = parse_order_selection(j, "order_top", order_valid, order_error);
+    if (!order_valid) {
+      RCLCPP_ERROR(get_logger(), "%s", order_error.c_str());
+      publish_error(order_error);
+      return;
+    }
+    task.order_bottom = parse_order_selection(j, "order_bottom", order_valid, order_error);
+    if (!order_valid) {
+      RCLCPP_ERROR(get_logger(), "%s", order_error.c_str());
+      publish_error(order_error);
+      return;
+    }
 
   } catch (const json::exception & e) {
     RCLCPP_ERROR(get_logger(), "task_assign JSON parse error: %s", e.what());
@@ -165,6 +202,19 @@ void TaskManagerNode::on_task_assign(const std_msgs::msg::String::SharedPtr msg)
   if (!is_supported_task_type(task.task_type)) {
     RCLCPP_ERROR(get_logger(), "task_assign: unsupported task_type=%s", task.task_type.c_str());
     publish_error("task_assign: unsupported task_type");
+    return;
+  }
+  if (is_originless_task_type(task.task_type) && !task.origin.empty()) {
+    RCLCPP_ERROR(get_logger(),
+      "task_assign: task_type=%s requires origin null", task.task_type.c_str());
+    publish_error("task_assign: origin must be null for task_type " + task.task_type);
+    return;
+  }
+  if (task.task_type == "patient_clothes_rental" &&
+    !task.order_top && !task.order_bottom)
+  {
+    RCLCPP_ERROR(get_logger(), "patient clothing item selection is missing");
+    publish_error("patient clothing item selection is missing");
     return;
   }
 
@@ -1410,6 +1460,7 @@ bool TaskManagerNode::requires_task_finish(const ActiveTask & task) const
 {
   return task.task_type == "clothes_refill" ||
     task.task_type == "kit_delivery" ||
+    task.task_type == "kit_refill" ||
     task.task_type == "specimen_delivery" ||
     task.task_type == "logistics_delivery" ||
     task.task_type == "used_clothes_collection" ||
@@ -1421,12 +1472,56 @@ bool TaskManagerNode::is_supported_task_type(const std::string & task_type) cons
 {
   return task_type == "specimen_delivery" ||
     task_type == "kit_delivery" ||
+    task_type == "kit_refill" ||
     task_type == "logistics_delivery" ||
     task_type == "clothes_refill" ||
     task_type == "used_clothes_collection" ||
     task_type == "patient_clothes_rental" ||
     task_type == "patient_clothes_return" ||
     task_type == "battery_low";
+}
+
+bool TaskManagerNode::is_originless_task_type(const std::string & task_type) const
+{
+  return task_type == "kit_delivery" ||
+    task_type == "kit_refill" ||
+    task_type == "clothes_refill" ||
+    task_type == "patient_clothes_rental" ||
+    task_type == "patient_clothes_return" ||
+    task_type == "battery_low";
+}
+
+std::optional<int> TaskManagerNode::parse_order_selection(
+  const json & payload,
+  const char * field,
+  bool & valid,
+  std::string & error_message) const
+{
+  valid = true;
+  error_message.clear();
+
+  if (!payload.contains(field) || payload[field].is_null()) {
+    return std::nullopt;
+  }
+
+  const auto & value = payload[field];
+  if (!value.is_number_integer()) {
+    valid = false;
+    error_message = std::string("task_assign ") + field + " must be 0, 1, or null";
+    return std::nullopt;
+  }
+
+  const int selection = value.get<int>();
+  if (selection == 1) {
+    return 1;
+  }
+  if (selection == 0) {
+    return std::nullopt;
+  }
+
+  valid = false;
+  error_message = std::string("task_assign ") + field + " must be 0, 1, or null";
+  return std::nullopt;
 }
 
 // ============================================================

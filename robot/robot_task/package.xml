@@ -11,9 +11,11 @@
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <depend>rclcpp</depend>
+  <depend>rclcpp_action</depend>
   <depend>std_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>ament_index_cpp</depend>
+  <depend>control</depend>
 
   <!-- yaml-cpp: bundled with ROS2 / available on Ubuntu 24.04 -->
   <depend>yaml_cpp_vendor</depend>
@@ -21,9 +23,13 @@
   <!-- nlohmann_json: available as a system package on Ubuntu 24.04 -->
   <!-- sudo apt install nlohmann-json3-dev -->
   <build_depend>nlohmann-json-dev</build_depend>
+  <build_depend>rosidl_default_generators</build_depend>
+  <exec_depend>rosidl_default_runtime</exec_depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
+
+  <member_of_group>rosidl_interface_packages</member_of_group>
 
   <export>
     <build_type>ament_cmake</build_type>

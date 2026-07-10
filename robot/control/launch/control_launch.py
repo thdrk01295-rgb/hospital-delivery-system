@@ -1,5 +1,6 @@
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -13,6 +14,7 @@ def generate_launch_description():
         DeclareLaunchArgument('wheel_separation', default_value='0.35'),
         DeclareLaunchArgument('max_linear_vel', default_value='1.0'),
         DeclareLaunchArgument('watchdog_timeout', default_value='0.5'),
+        DeclareLaunchArgument('enable_control_motor_bridge', default_value='false'),
 
         Node(
             package='control',
@@ -44,5 +46,12 @@ def generate_launch_description():
                 'left_tick_sign': 1.0,
                 'right_tick_sign': 1.0
             }]
+        ),
+        Node(
+            package='control',
+            executable='control_motor_bridge_node',
+            name='control_motor_bridge_node',
+            output='screen',
+            condition=IfCondition(LaunchConfiguration('enable_control_motor_bridge')),
         ),
     ])
