@@ -102,6 +102,7 @@ async def maybe_dispatch() -> None:
 
 def _publish_task_assignment(robot: Robot, task: Task) -> None:
     from app.mqtt.client import publish
+    from app.constants.enums import TaskType
 
     origin_code = task.origin_location.location_code if task.origin_location else None
     dest_code = task.destination_location.location_code if task.destination_location else None
@@ -114,6 +115,15 @@ def _publish_task_assignment(robot: Robot, task: Task) -> None:
         "destination": dest_code, # location_code; non-null enforced by dispatch filter
         "priority": task.priority,
     }
+
+    # Include clothing item flags for patient clothing tasks so the robot
+    # knows which compartment(s) to open.  Values are 1 (selected) or null
+    # (not selected / omitted by the patient).
+    clothing_types = {TaskType.PATIENT_CLOTHES_RENTAL, TaskType.PATIENT_CLOTHES_RETURN}
+    if task.task_type in clothing_types:
+        payload["order_top"]    = task.order_top
+        payload["order_bottom"] = task.order_bottom
+
     logger.info(f"[dispatch] MQTT server/task_assign payload: {payload}")
     publish(mqtt_topics.SERVER_TASK_ASSIGN, payload)
 

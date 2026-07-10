@@ -7,7 +7,7 @@
 
 ---
 
-## 0. Revision Summary (v2 → v3)
+## 0. Revision Summary (v2 → v3 → v4)
 
 1. `robot/location` removed from required contract — server infers location from `robot/task_complete` destination.
 2. `robot/battery` is now the server-side trigger for low-battery handling (`battery_percent <= 20`).
@@ -21,6 +21,7 @@
 10. `server/task_cancel` publish now implemented in nurse/patient cancel flows.
 11. Emergency STOP requeues interrupted task to PENDING (not CANCELLED).
 12. `robot/status { state: "COMPLETE" }` does not finalize task DB status.
+13. `server/task_assign` now includes `order_top`/`order_bottom` for `patient_clothes_rental` and `patient_clothes_return` tasks so the robot knows which compartment(s) to open.
 
 ---
 
@@ -246,7 +247,10 @@ To clear error state: publish `robot/status { "state": "IDLE" }` — server auto
 | `origin` | string or null | No | `null` = skip origin, go directly to destination |
 | `destination` | string | Yes | Must not be null; exact `locations.location_code` |
 | `priority` | integer | Yes | Lower = higher priority |
+| `order_top` | integer or null | Only for patient clothing tasks | `1` = top selected, `null` = not selected. Present only when `task_type` is `patient_clothes_rental` or `patient_clothes_return`. |
+| `order_bottom` | integer or null | Only for patient clothing tasks | `1` = bottom selected, `null` = not selected. Present only when `task_type` is `patient_clothes_rental` or `patient_clothes_return`. |
 
+**Standard task example:**
 ```json
 {
   "robot_id": "AMR-001",
@@ -257,6 +261,36 @@ To clear error state: publish `robot/status { "state": "IDLE" }` — server auto
   "priority": 3
 }
 ```
+
+**Patient clothing task example (top + bottom selected):**
+```json
+{
+  "robot_id": "AMR-001",
+  "task_id": 45,
+  "task_type": "patient_clothes_rental",
+  "origin": null,
+  "destination": "11011",
+  "priority": 6,
+  "order_top": 1,
+  "order_bottom": 1
+}
+```
+
+**Patient clothing task example (top only selected):**
+```json
+{
+  "robot_id": "AMR-001",
+  "task_id": 46,
+  "task_type": "patient_clothes_return",
+  "origin": null,
+  "destination": "11011",
+  "priority": 6,
+  "order_top": 1,
+  "order_bottom": null
+}
+```
+
+> `order_top` and `order_bottom` are binary flags (`1` = selected, `null` = not selected), not quantities. The robot should open the corresponding compartment(s) based on these flags.
 
 ---
 
@@ -374,15 +408,23 @@ STOP and RELEASE use the same topic, differentiated by `command`.
 
 For `patient_clothes_rental` and `patient_clothes_return`:
 
-1. Robot receives `server/task_assign`.
-2. Robot navigates to destination (patient's bed).
-3. Robot opens patient compartment, publishes `robot/status { "state": "DELIVERY_OPEN_PAT" }`.
-4. Patient presses completion button → `POST /tasks/{task_id}/complete`.
-5. Server sets `tasks.status = COMPLETE`, broadcasts `task_status_update`.
-6. Server publishes `server/task_finish { "robot_id": "AMR-001", "task_id": <id> }`.
-7. Robot clears active task, publishes `robot/status { "state": "IDLE" }`.
+1. Robot receives `server/task_assign` — includes `order_top` and `order_bottom` flags.
+2. Robot checks `order_top`/`order_bottom` to determine which compartment(s) to prepare.
+3. Robot navigates to destination (patient's bed).
+4. Robot opens patient compartment(s), publishes `robot/status { "state": "DELIVERY_OPEN_PAT" }`.
+5. Patient presses completion button → `POST /tasks/{task_id}/complete`.
+6. Server sets `tasks.status = COMPLETE`, broadcasts `task_status_update`.
+7. Server publishes `server/task_finish { "robot_id": "AMR-001", "task_id": <id> }`.
+8. Robot clears active task, publishes `robot/status { "state": "IDLE" }`.
 
 **Robot must NOT publish `robot/task_complete` for patient clothing tasks.**
+
+**Compartment flag semantics:**
+- `order_top: 1` → top clothing compartment required
+- `order_top: null` → top compartment not required (omit/skip)
+- `order_bottom: 1` → bottom clothing compartment required
+- `order_bottom: null` → bottom compartment not required (omit/skip)
+- At least one of `order_top` or `order_bottom` will be `1`; the server does not validate this constraint but the patient UI enforces it.
 
 ---
 
@@ -443,6 +485,7 @@ Examples: `11011` (1층 101호 1번), `33045` (3층 304호 5번), `44086` (4층 
 | `robot/task_complete` → robot location inference | ✅ Updates `robots.current_location_id` from task destination |
 | `robot/status COMPLETE` not finalizing task | ✅ No task finalization in status handler |
 | Patient task: `server/task_finish` on completion | ✅ Published after `POST /tasks/{id}/complete` |
+| `server/task_assign` clothing flags for patient tasks | ✅ `order_top`/`order_bottom` included for `patient_clothes_rental` and `patient_clothes_return` |
 
 ---
 
