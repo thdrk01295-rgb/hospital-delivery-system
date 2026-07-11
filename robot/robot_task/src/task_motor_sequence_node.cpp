@@ -631,31 +631,38 @@ bool TaskMotorSequenceNode::buildSequence(
       if (!addStep(steps, "door_open", "door_open_command", false, message)) {
         return false;
       }
-      if (goal.order_top == 1) {
+      const bool needs_top = goal.order_top == 1;
+      const bool needs_bottom = goal.order_bottom == 1;
+      if (needs_top) {
         if (!addStep(steps, "lift_level_1", "lift_level_1_command", true, message) ||
           !addStep(
             steps,
             "top_clothes_step_forward",
             "top_clothes_step_forward_command",
             false,
-            message) ||
-          !addStep(steps, "lift_top", "lift_top_command", true, message))
+            message))
         {
           return false;
         }
       }
-      if (goal.order_bottom == 1) {
-        if (!addStep(steps, "lift_level_2", "lift_level_2_command", true, message) ||
-          !addStep(
+      if (needs_bottom) {
+        if (!needs_top &&
+          !addStep(steps, "lift_level_2", "lift_level_2_command", true, message))
+        {
+          return false;
+        }
+        if (!addStep(
             steps,
             "bottom_clothes_step_forward",
             "bottom_clothes_step_forward_command",
             false,
-            message) ||
-          !addStep(steps, "lift_top", "lift_top_command", true, message))
+            message))
         {
           return false;
         }
+      }
+      if (needs_top || needs_bottom) {
+        return addStep(steps, "lift_top", "lift_top_command", true, message);
       }
       return true;
     }

@@ -140,7 +140,10 @@ TEST_F(TaskMotorSequenceNodeTest, TopAndBottomRentalRunsM1BeforeM2)
 
   EXPECT_EQ(
     commands,
-    (std::vector<std::string>{"o", "1l", "w", "tl", "2l", "e", "tl"}));
+    (std::vector<std::string>{"o", "1l", "w", "e", "tl"}));
+  EXPECT_EQ(std::find(commands.begin(), commands.end(), "2l"), commands.end());
+  EXPECT_EQ(std::count(commands.begin(), commands.end(), "tl"), 1);
+  EXPECT_EQ(commands.back(), "tl");
   const auto top_command = std::find(commands.begin(), commands.end(), "w");
   const auto bottom_command = std::find(commands.begin(), commands.end(), "e");
   ASSERT_NE(top_command, commands.end());
