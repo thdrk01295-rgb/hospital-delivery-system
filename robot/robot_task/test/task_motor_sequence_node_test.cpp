@@ -91,6 +91,19 @@ protected:
     return goal;
   }
 
+  ExecuteMotorSequence::Goal goalFor(
+    const std::string & task_type,
+    const std::string & stop_type,
+    const std::string & phase)
+  {
+    ExecuteMotorSequence::Goal goal;
+    goal.task_id = 3;
+    goal.task_type = task_type;
+    goal.stop_type = stop_type;
+    goal.phase = phase;
+    return goal;
+  }
+
   std::vector<std::string> commandsFor(const ExecuteMotorSequence::Goal & goal)
   {
     const auto result = node_->buildAndValidateSequenceForTest(goal);
@@ -162,6 +175,56 @@ TEST_F(TaskMotorSequenceNodeTest, KitDeliveryKeepsM3ForwardCommand)
   EXPECT_FALSE(containsAnyReverseCommand(commands));
 }
 
+TEST_F(TaskMotorSequenceNodeTest, SupportedTaskPhaseLookupTableIsComplete)
+{
+  struct SequenceCase
+  {
+    std::string task_type;
+    std::string stop_type;
+    std::string phase;
+    std::vector<std::string> commands;
+  };
+
+  const std::vector<SequenceCase> cases = {
+    {"clothes_refill", "destination", "PREPARE", {"4o", "3o"}},
+    {"clothes_refill", "destination", "FINALIZE", {"4c", "3c"}},
+    {"kit_refill", "destination", "PREPARE", {"2o"}},
+    {"kit_refill", "destination", "FINALIZE", {"2c"}},
+    {"kit_delivery", "destination", "PREPARE", {"3l", "r", "tl"}},
+    {"kit_delivery", "destination", "FINALIZE", {"hl"}},
+    {"specimen_delivery", "origin", "PREPARE", {"1o"}},
+    {"specimen_delivery", "origin", "FINALIZE", {"1c"}},
+    {"specimen_delivery", "destination", "PREPARE", {"1o"}},
+    {"specimen_delivery", "destination", "FINALIZE", {"1c"}},
+    {"logistics_delivery", "origin", "PREPARE", {"1o"}},
+    {"logistics_delivery", "origin", "FINALIZE", {"1c"}},
+    {"logistics_delivery", "destination", "PREPARE", {"1o"}},
+    {"logistics_delivery", "destination", "FINALIZE", {"1c"}},
+    {"used_clothes_collection", "origin", "PREPARE", {"5o"}},
+    {"used_clothes_collection", "origin", "FINALIZE", {"5c"}},
+    {"used_clothes_collection", "destination", "PREPARE", {"5o"}},
+    {"used_clothes_collection", "destination", "FINALIZE", {"5c"}},
+    {"patient_clothes_return", "destination", "PREPARE", {"o"}},
+    {"patient_clothes_return", "destination", "FINALIZE", {"c"}},
+    {"battery_low", "destination", "PREPARE", {}},
+    {"battery_low", "destination", "FINALIZE", {}},
+  };
+
+  for (const auto & item : cases) {
+    const auto commands = commandsFor(goalFor(item.task_type, item.stop_type, item.phase));
+    EXPECT_EQ(commands, item.commands)
+      << item.task_type << "/" << item.stop_type << "/" << item.phase;
+  }
+}
+
+TEST_F(TaskMotorSequenceNodeTest, PatientRentalFinalizeKeepsDoorCloseAndLiftHome)
+{
+  auto goal = rentalGoal(1, 1);
+  goal.phase = "FINALIZE";
+
+  EXPECT_EQ(commandsFor(goal), (std::vector<std::string>{"c", "hl"}));
+}
+
 TEST_F(TaskMotorSequenceNodeTest, RejectsMissingSelectedClothingCommand)
 {
   node_->set_parameter(rclcpp::Parameter("top_clothes_step_forward_command", ""));
@@ -176,6 +239,24 @@ TEST_F(TaskMotorSequenceNodeTest, RejectsMissingSelectedClothingCommand)
   EXPECT_EQ(
     result.message,
     "motor command parameter is empty: bottom_clothes_step_forward_command");
+}
+
+TEST_F(TaskMotorSequenceNodeTest, RejectsMissingOrInvalidSequenceLookup)
+{
+  auto result = node_->buildAndValidateSequenceForTest(
+    goalFor("kit_delivery", "origin", "PREPARE"));
+  EXPECT_FALSE(result.success);
+  EXPECT_EQ(result.message, "originless task requires stop_type=destination: kit_delivery");
+
+  result = node_->buildAndValidateSequenceForTest(
+    goalFor("unknown_delivery", "destination", "PREPARE"));
+  EXPECT_FALSE(result.success);
+  EXPECT_EQ(result.message, "unsupported task_type: unknown_delivery");
+
+  result = node_->buildAndValidateSequenceForTest(
+    goalFor("logistics_delivery", "destination", "prepare"));
+  EXPECT_FALSE(result.success);
+  EXPECT_EQ(result.message, "invalid phase: prepare");
 }
 
 }  // namespace

@@ -11,6 +11,19 @@ using std::placeholders::_1;
 namespace robot_task
 {
 
+namespace
+{
+
+std::string motorSequenceKey(
+  const std::string & task_type,
+  const std::string & stop_type,
+  const std::string & phase)
+{
+  return task_type + "/" + stop_type + "/" + phase;
+}
+
+}  // namespace
+
 // ============================================================
 // Constructor
 // ============================================================
@@ -555,6 +568,23 @@ void TaskManagerNode::on_lock_command(const std_msgs::msg::String::SharedPtr msg
   }
 
   if (lock_mock_enabled_) {
+    const std::string phase = command == "UNLOCK" ? "PREPARE" : "FINALIZE";
+    std::string stop_type = "unknown";
+    if (unlock_phase_ == "ORIGIN") {
+      stop_type = "origin";
+    } else if (unlock_phase_ == "DESTINATION") {
+      stop_type = "destination";
+    }
+    RCLCPP_INFO(
+      get_logger(),
+      "Motor sequence bypassed by lock mock: task_id=%d task_type=%s command=%s phase=%s "
+      "stop_type=%s sequence_key=%s",
+      active_task_->task_id,
+      active_task_->task_type.c_str(),
+      command.c_str(),
+      phase.c_str(),
+      stop_type.c_str(),
+      motorSequenceKey(active_task_->task_type, stop_type, phase).c_str());
     publish_lock_status(command, "ACCEPTED");
     if (command == "UNLOCK") {
       publish_lock_status(command, "OPENED");
@@ -1463,8 +1493,14 @@ void TaskManagerNode::request_motor_sequence(
 
   motor_sequence_client_->async_send_goal(goal, options);
   RCLCPP_INFO(get_logger(),
-    "Motor sequence requested: task_id=%ld command=%s phase=%s stop_type=%s",
-    task_id, lock_command.c_str(), phase.c_str(), stop_type.c_str());
+    "Motor sequence requested: task_id=%ld task_type=%s command=%s phase=%s stop_type=%s "
+    "sequence_key=%s",
+    task_id,
+    goal.task_type.c_str(),
+    lock_command.c_str(),
+    phase.c_str(),
+    stop_type.c_str(),
+    motorSequenceKey(goal.task_type, stop_type, phase).c_str());
 }
 
 void TaskManagerNode::on_motor_goal_response(

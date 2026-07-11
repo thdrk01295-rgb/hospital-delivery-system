@@ -13,6 +13,14 @@ namespace
 
 constexpr const char * kActionName = "/robot_task/execute_motor_sequence";
 
+std::string sequenceKey(
+  const std::string & task_type,
+  const std::string & stop_type,
+  const std::string & phase)
+{
+  return task_type + "/" + stop_type + "/" + phase;
+}
+
 std::string formatMotorSteps(const std::vector<MotorStep> & steps)
 {
   std::ostringstream out;
@@ -106,13 +114,23 @@ rclcpp_action::GoalResponse TaskMotorSequenceNode::handleGoal(
   (void)uuid;
   RCLCPP_INFO(
     get_logger(),
-    "Motor sequence goal received: task_id=%ld type=%s stop=%s phase=%s",
-    goal->task_id, goal->task_type.c_str(), goal->stop_type.c_str(), goal->phase.c_str());
+    "Motor sequence goal received: task_id=%ld type=%s stop=%s phase=%s sequence_key=%s",
+    goal->task_id,
+    goal->task_type.c_str(),
+    goal->stop_type.c_str(),
+    goal->phase.c_str(),
+    sequenceKey(goal->task_type, goal->stop_type, goal->phase).c_str());
 
   auto build_result = buildAndValidateSequence(*goal);
   if (!build_result.success) {
     RCLCPP_WARN(
-      get_logger(), "Rejected motor sequence goal: %s", build_result.message.c_str());
+      get_logger(),
+      "Rejected motor sequence goal: task_id=%ld task_type=%s phase=%s sequence_key=%s reason=%s",
+      goal->task_id,
+      goal->task_type.c_str(),
+      goal->phase.c_str(),
+      sequenceKey(goal->task_type, goal->stop_type, goal->phase).c_str(),
+      build_result.message.c_str());
     return rclcpp_action::GoalResponse::REJECT;
   }
 
@@ -266,6 +284,15 @@ void TaskMotorSequenceNode::startGoal(
   if (!build_result.success) {
     std::lock_guard<std::mutex> lock(sequence_mutex_);
     goal_reserved_ = false;
+    RCLCPP_WARN(
+      get_logger(),
+      "Motor sequence lookup failed after accept: task_id=%ld task_type=%s phase=%s "
+      "sequence_key=%s reason=%s",
+      goal->task_id,
+      goal->task_type.c_str(),
+      goal->phase.c_str(),
+      sequenceKey(goal->task_type, goal->stop_type, goal->phase).c_str(),
+      build_result.message.c_str());
     failGoal(goal_handle, build_result.message);
     return;
   }
@@ -277,8 +304,11 @@ void TaskMotorSequenceNode::startGoal(
     }
     RCLCPP_INFO(
       get_logger(),
-      "Motor sequence completed: task_id=%ld phase=%s",
-      goal->task_id, goal->phase.c_str());
+      "Motor sequence completed: task_id=%ld task_type=%s phase=%s sequence_key=%s",
+      goal->task_id,
+      goal->task_type.c_str(),
+      goal->phase.c_str(),
+      sequenceKey(goal->task_type, goal->stop_type, goal->phase).c_str());
     auto result = std::make_shared<ExecuteMotorSequence::Result>();
     result->success = true;
     result->message = "no motor sequence required for battery_low";
@@ -323,11 +353,13 @@ void TaskMotorSequenceNode::startGoal(
 
   RCLCPP_INFO(
     get_logger(),
-    "Starting motor sequence: task_id=%ld task_type=%s stop_type=%s phase=%s steps=%s",
+    "Starting motor sequence: task_id=%ld task_type=%s stop_type=%s phase=%s sequence_key=%s "
+    "steps=%s",
     goal->task_id,
     goal->task_type.c_str(),
     goal->stop_type.c_str(),
     goal->phase.c_str(),
+    sequenceKey(goal->task_type, goal->stop_type, goal->phase).c_str(),
     steps_text.c_str());
 
   sendNextStep(generation);
