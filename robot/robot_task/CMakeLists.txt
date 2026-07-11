@@ -15,6 +15,7 @@ find_package(ament_cmake       REQUIRED)
 find_package(rclcpp            REQUIRED)
 find_package(rclcpp_action     REQUIRED)
 find_package(std_msgs          REQUIRED)
+find_package(std_srvs          REQUIRED)
 find_package(geometry_msgs     REQUIRED)
 find_package(ament_index_cpp   REQUIRED)
 find_package(yaml_cpp_vendor   REQUIRED)
@@ -44,6 +45,8 @@ target_include_directories(location_mapper PUBLIC
 )
 target_link_libraries(location_mapper yaml-cpp::yaml-cpp)
 
+rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} "rosidl_typesupport_cpp")
+
 # ── task_manager_node executable ─────────────────────────────
 add_executable(task_manager_node
   src/task_manager_node.cpp
@@ -51,7 +54,9 @@ add_executable(task_manager_node
 )
 ament_target_dependencies(task_manager_node
   rclcpp
+  rclcpp_action
   std_msgs
+  std_srvs
   geometry_msgs
   ament_index_cpp
 )
@@ -59,6 +64,7 @@ target_link_libraries(task_manager_node
   location_mapper
   nlohmann_json::nlohmann_json
   yaml-cpp::yaml-cpp
+  "${cpp_typesupport_target}"
 )
 
 add_executable(task_motor_sequence_node
@@ -69,9 +75,9 @@ ament_target_dependencies(task_motor_sequence_node
   rclcpp
   rclcpp_action
   std_msgs
+  std_srvs
   control
 )
-rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} "rosidl_typesupport_cpp")
 target_link_libraries(task_motor_sequence_node
   "${cpp_typesupport_target}"
 )

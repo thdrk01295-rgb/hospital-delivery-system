@@ -5,6 +5,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/string.hpp>
+#include <std_srvs/srv/trigger.hpp>
 
 #include "control/srv/motor_command.hpp"
 
@@ -75,19 +76,101 @@ bool baudRateToTermios(int baud_rate, speed_t & speed)
   }
 }
 
-bool isSuccessLine(const std::string & line)
+std::string toLowerAscii(std::string value)
 {
-  return line.find("[DONE]") != std::string::npos ||
-         line.find("[LOG] 구동 동작 정상 완료.") != std::string::npos ||
-         (line.find("[HOME]") != std::string::npos && line.find("완료") != std::string::npos) ||
-         line.find("[LIFT] 엔코더 원점(0) 리셋.") != std::string::npos ||
-         line.find("[M6] 닫기 완료.") != std::string::npos;
+  for (char & c : value) {
+    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  }
+  return value;
 }
 
-bool isFailureLine(const std::string & line)
+bool startsWith(const std::string & value, const std::string & prefix)
 {
-  return line.find("[ERR]") != std::string::npos ||
-         line.find("[ERROR]") != std::string::npos;
+  return value.rfind(prefix, 0) == 0;
+}
+
+bool isLogMoveDone(const std::string & line)
+{
+  return trimWhitespace(line) == "[LOG] 구동 동작 정상 완료.";
+}
+
+bool isOptionalHomeDone(const std::string & line)
+{
+  return trimWhitespace(line) == "[HOME] 선택적 원점 정렬 완료.";
+}
+
+bool isFailureResponse(const std::string & line)
+{
+  const std::string trimmed_line = trimWhitespace(line);
+  return startsWith(trimmed_line, "[ERR]") || startsWith(trimmed_line, "[ERROR]");
+}
+
+bool isServoSuccessLine(const std::string & command, const std::string & line)
+{
+  if (command.size() != 2 || command[0] < '1' || command[0] > '5') {
+    return false;
+  }
+
+  const char servo_command = command[1];
+  if (servo_command == 'o') {
+    return startsWith(line, "[DONE] SERVO:" + std::string(1, command[0]) + ":OPEN");
+  }
+  if (servo_command == 'c') {
+    return startsWith(line, "[DONE] SERVO:" + std::string(1, command[0]) + ":CLOSE");
+  }
+
+  return false;
+}
+
+bool isDoorSuccessLine(const std::string & command, const std::string & line)
+{
+  return (command == "o" || command == "c") && isLogMoveDone(line);
+}
+
+bool isStepperSuccessLine(const std::string & command, const std::string & line)
+{
+  if (command == "w" || command == "s" || command == "e" ||
+    command == "d" || command == "r" || command == "f")
+  {
+    return isLogMoveDone(line) || isOptionalHomeDone(line);
+  }
+
+  return false;
+}
+
+bool isLiftSuccessLine(const std::string & command, const std::string & line)
+{
+  if (command == "1l" || command == "2l" || command == "3l" ||
+    command == "tl" || startsWith(command, "lift:"))
+  {
+    return startsWith(line, "[DONE] LIFT:DONE");
+  }
+  if (command == "hl") {
+    return startsWith(line, "[DONE] LIFT:HOME");
+  }
+  if (command == "h") {
+    return trimWhitespace(line) == "[LIFT] 엔코더 원점(0) 리셋.";
+  }
+  if (command == "k") {
+    return startsWith(line, "[DONE] LIFT:STOP");
+  }
+
+  return false;
+}
+
+bool isResetSuccessLine(const std::string & command, const std::string & line)
+{
+  return command == "reset" && trimWhitespace(line) == "[HOME] 초기화 완료.";
+}
+
+bool isSuccessResponse(const std::string & command, const std::string & line)
+{
+  const std::string normalized_command = toLowerAscii(trimWhitespace(command));
+  return isServoSuccessLine(normalized_command, line) ||
+         isDoorSuccessLine(normalized_command, line) ||
+         isStepperSuccessLine(normalized_command, line) ||
+         isLiftSuccessLine(normalized_command, line) ||
+         isResetSuccessLine(normalized_command, line);
 }
 
 }  // namespace
@@ -109,6 +192,7 @@ public:
     baud_rate_ = declare_parameter<int>("baud_rate", 115200);
     timeout_sec_ = declare_parameter<double>("timeout_sec", 10.0);
     require_ready_ = declare_parameter<bool>("require_ready", true);
+    emergency_stop_command_ = declare_parameter<std::string>("emergency_stop_command", "k");
 
     feedback_pub_ = create_publisher<std_msgs::msg::String>("/control/motor_feedback", 50);
     ready_pub_ = create_publisher<std_msgs::msg::Bool>(
@@ -117,6 +201,11 @@ public:
       "/control/motor_command",
       std::bind(
         &ControlMotorBridgeNode::handleCommand, this,
+        std::placeholders::_1, std::placeholders::_2));
+    emergency_stop_srv_ = create_service<std_srvs::srv::Trigger>(
+      "/control/motor_emergency_stop",
+      std::bind(
+        &ControlMotorBridgeNode::handleEmergencyStop, this,
         std::placeholders::_1, std::placeholders::_2));
 
     publishReady(false);
@@ -168,12 +257,14 @@ private:
       command_finished_ = false;
       command_success_ = false;
       command_response_.clear();
+      current_command_ = command;
       last_command_line_.clear();
     }
 
     if (!writeSerial(command + "\n")) {
       std::lock_guard<std::mutex> lock(command_mutex_);
       command_in_progress_ = false;
+      current_command_.clear();
       response->success = false;
       response->response = "failed to write command to serial port";
       return;
@@ -194,6 +285,36 @@ private:
 
     command_in_progress_ = false;
     command_finished_ = false;
+    current_command_.clear();
+  }
+
+  void handleEmergencyStop(
+    const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
+    std::shared_ptr<std_srvs::srv::Trigger::Response> response)
+  {
+    (void)request;
+
+    const std::string command = trimWhitespace(emergency_stop_command_);
+    if (command.empty()) {
+      response->success = false;
+      response->message = "emergency stop command is empty";
+      return;
+    }
+
+    if (!connected_.load()) {
+      response->success = false;
+      response->message = "motor serial is not connected";
+      return;
+    }
+
+    if (!writeSerial(command + "\n")) {
+      response->success = false;
+      response->message = "failed to write lift emergency stop command";
+      return;
+    }
+
+    response->success = true;
+    response->message = "lift emergency stop command sent";
   }
 
   bool openSerial()
@@ -271,6 +392,7 @@ private:
 
   bool writeSerial(const std::string & data)
   {
+    std::lock_guard<std::mutex> write_lock(serial_write_mutex_);
     std::lock_guard<std::mutex> lock(serial_mutex_);
     if (serial_fd_ < 0) {
       return false;
@@ -365,12 +487,12 @@ private:
     }
 
     last_command_line_ = line;
-    if (isFailureLine(line)) {
+    if (isFailureResponse(line)) {
       command_success_ = false;
       command_response_ = line;
       command_finished_ = true;
       command_cv_.notify_all();
-    } else if (isSuccessLine(line)) {
+    } else if (isSuccessResponse(current_command_, line)) {
       command_success_ = true;
       command_response_ = line;
       command_finished_ = true;
@@ -403,13 +525,16 @@ private:
   int baud_rate_;
   double timeout_sec_;
   bool require_ready_;
+  std::string emergency_stop_command_;
 
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr feedback_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr ready_pub_;
   rclcpp::Service<control::srv::MotorCommand>::SharedPtr command_srv_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr emergency_stop_srv_;
 
   int serial_fd_;
   std::mutex serial_mutex_;
+  std::mutex serial_write_mutex_;
   std::thread read_thread_;
   std::atomic<bool> running_;
   std::atomic<bool> ready_;
@@ -421,11 +546,13 @@ private:
   bool command_finished_;
   bool command_success_;
   std::string command_response_;
+  std::string current_command_;
   std::string last_command_line_;
 };
 
 }  // namespace control
 
+#ifndef CONTROL_MOTOR_BRIDGE_NODE_DISABLE_MAIN
 int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
@@ -434,3 +561,4 @@ int main(int argc, char ** argv)
   rclcpp::shutdown();
   return 0;
 }
+#endif

@@ -2,6 +2,8 @@ task_motor_sequence_node:
   ros__parameters:
     motor_ready_topic: /control/motor_ready
     motor_service_name: /control/motor_command
+    motor_emergency_stop_service_name: /control/motor_emergency_stop
+    stop_motor_sequence_service_name: /robot_task/stop_motor_sequence
     motor_ready_timeout_sec: 2.0
 
     lift_level_1_command: "1l"
@@ -13,19 +15,19 @@ task_motor_sequence_node:
     clothes_step_forward_command: "w"
     kit_step_forward_command: "r"
 
-    servo_1_release_command: ""
-    servo_1_lock_command: ""
-    servo_2_release_command: ""
-    servo_2_lock_command: ""
-    servo_3_release_command: ""
-    servo_3_lock_command: ""
-    servo_4_release_command: ""
-    servo_4_lock_command: ""
-    servo_5_release_command: ""
-    servo_5_lock_command: ""
+    servo_1_release_command: "1o"
+    servo_1_lock_command: "1c"
+    servo_2_release_command: "2o"
+    servo_2_lock_command: "2c"
+    servo_3_release_command: "3o"
+    servo_3_lock_command: "3c"
+    servo_4_release_command: "4o"
+    servo_4_lock_command: "4c"
+    servo_5_release_command: "5o"
+    servo_5_lock_command: "5c"
 
-    door_open_command: ""
-    door_close_command: ""
+    door_open_command: "o"
+    door_close_command: "c"
 
-    lift_home_command: ""
-    reset_command: ""
+    lift_home_command: "hl"
+    reset_command: "reset"

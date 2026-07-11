@@ -20,6 +20,9 @@ TaskManagerNode::TaskManagerNode(const rclcpp::NodeOptions & options)
   robot_id_ = declare_parameter<std::string>("robot_id", "AMR-001");
   navigation_timeout_sec_ = declare_parameter<double>("navigation_timeout_sec", 300.0);
   lock_mock_enabled_ = declare_parameter<bool>("lock_mock_enabled", true);
+  const auto motor_sequence_stop_service_name =
+    declare_parameter<std::string>(
+      "motor_sequence_stop_service_name", "/robot_task/stop_motor_sequence");
   if (navigation_timeout_sec_ <= 0.0) {
     RCLCPP_WARN(get_logger(),
       "navigation_timeout_sec must be positive; using default 300.0 sec");
@@ -87,6 +90,10 @@ TaskManagerNode::TaskManagerNode(const rclcpp::NodeOptions & options)
   pub_error_event_   = create_publisher<std_msgs::msg::String>("/robot/error_event",         10);
   pub_lock_status_   = create_publisher<std_msgs::msg::String>("/robot/lock_status",         10);
   pub_cmd_vel_        = create_publisher<geometry_msgs::msg::Twist>("/cmd_vel",              10);
+  motor_sequence_client_ = rclcpp_action::create_client<ExecuteMotorSequence>(
+    this, "/robot_task/execute_motor_sequence");
+  motor_sequence_stop_client_ =
+    create_client<std_srvs::srv::Trigger>(motor_sequence_stop_service_name);
 
   // Initial state broadcast so mqtt_bridge knows we're IDLE on startup
   publish_task_state();
@@ -313,6 +320,8 @@ void TaskManagerNode::on_task_cancel(const std_msgs::msg::String::SharedPtr msg)
     active_task_->task_id,
     cancel_reason.empty() ? "unspecified" : cancel_reason.c_str());
 
+  cancel_motor_sequence();
+
   // Cancel any running timers
   if (loading_timer_)   { loading_timer_->cancel();   loading_timer_.reset(); }
   if (unloading_timer_) { unloading_timer_->cancel(); unloading_timer_.reset(); }
@@ -386,6 +395,13 @@ void TaskManagerNode::on_task_finish(const std_msgs::msg::String::SharedPtr msg)
     RCLCPP_WARN(get_logger(),
       "task_finish task_id mismatch — got %d active %d; ignored",
       finish_task_id, active_task_->task_id);
+    return;
+  }
+  if (motor_sequence_pending_) {
+    RCLCPP_WARN(get_logger(),
+      "task_finish ignored while motor sequence is pending: task_id=%d phase=%s",
+      active_task_->task_id,
+      pending_motor_phase_to_string(pending_motor_phase_).c_str());
     return;
   }
 
@@ -491,6 +507,19 @@ void TaskManagerNode::on_lock_command(const std_msgs::msg::String::SharedPtr msg
     }
   }
 
+  if (motor_sequence_pending_) {
+    RCLCPP_WARN(get_logger(),
+      "%s rejected while motor sequence is pending: phase=%s active_task_id=%ld",
+      command.c_str(),
+      pending_motor_phase_to_string(pending_motor_phase_).c_str(),
+      pending_motor_task_id_);
+    if (command == "UNLOCK") {
+      log_unlock_rejected(command_task_id, "motor sequence is in progress");
+    }
+    publish_lock_status(command, "FAILED", "motor sequence is in progress");
+    return;
+  }
+
   if (command == "UNLOCK") {
     if (!active_task_) {
       RCLCPP_WARN(get_logger(), "UNLOCK received without active task — rejected");
@@ -505,27 +534,39 @@ void TaskManagerNode::on_lock_command(const std_msgs::msg::String::SharedPtr msg
     }
   }
 
-  if (command == "LOCK" && !active_task_) {
-    RCLCPP_WARN(get_logger(), "LOCK received without active task — rejected");
-    publish_lock_status(command, "FAILED", "no active task");
+  if (command == "LOCK") {
+    if (!active_task_) {
+      RCLCPP_WARN(get_logger(), "LOCK received without active task — rejected");
+      publish_lock_status(command, "FAILED", "no active task");
+      return;
+    }
+    if (!can_accept_lock_command()) {
+      RCLCPP_WARN(get_logger(),
+        "LOCK rejected: state=%s lock_open=%s pending_finish_after_lock=%s "
+        "unlock_phase=%s navigation_in_progress=%s",
+        state_to_string(state_).c_str(),
+        lock_open_ ? "true" : "false",
+        pending_finish_after_lock_ ? "true" : "false",
+        unlock_phase_.empty() ? "none" : unlock_phase_.c_str(),
+        navigation_in_progress_ ? "true" : "false");
+      publish_lock_status(command, "FAILED", "robot is not waiting for lock at this stop");
+      return;
+    }
+  }
+
+  if (lock_mock_enabled_) {
+    publish_lock_status(command, "ACCEPTED");
+    if (command == "UNLOCK") {
+      publish_lock_status(command, "OPENED");
+      handle_lock_opened();
+    } else {
+      publish_lock_status(command, "LOCKED");
+      handle_lock_locked();
+    }
     return;
   }
 
-  publish_lock_status(command, "ACCEPTED");
-  if (!lock_mock_enabled_) {
-    RCLCPP_INFO(get_logger(),
-      "lock_mock_enabled=false; waiting for external lock/control result for %s",
-      command.c_str());
-    return;
-  }
-
-  if (command == "UNLOCK") {
-    publish_lock_status(command, "OPENED");
-    handle_lock_opened();
-  } else {
-    publish_lock_status(command, "LOCKED");
-    handle_lock_locked();
-  }
+  request_motor_sequence(command == "UNLOCK" ? "PREPARE" : "FINALIZE", command);
 }
 
 // ────────────────────────────────────────────────────────────
@@ -1031,6 +1072,14 @@ void TaskManagerNode::transition_to(TaskState next)
 
 bool TaskManagerNode::send_nav_goal(const std::string & code, const std::string & phase)
 {
+  if (motor_sequence_pending_) {
+    RCLCPP_WARN(get_logger(),
+      "send_nav_goal blocked while motor sequence is pending: phase=%s code=%s motor_phase=%s",
+      phase.c_str(), code.c_str(),
+      pending_motor_phase_to_string(pending_motor_phase_).c_str());
+    return false;
+  }
+
   if (lock_open_) {
     RCLCPP_ERROR(get_logger(),
       "send_nav_goal blocked while lock is open: phase=%s code=%s",
@@ -1213,6 +1262,9 @@ void TaskManagerNode::enter_emergency()
     task_id = active_task_->task_id;
   }
 
+  cancel_motor_sequence();
+  request_motor_sequence_stop();
+
   if (loading_timer_) {
     loading_timer_->cancel();
     loading_timer_.reset();
@@ -1334,6 +1386,304 @@ void TaskManagerNode::clear_interaction_context()
   pending_finish_after_lock_ = false;
   pending_destination_after_lock_ = false;
   lock_open_ = false;
+  clear_motor_sequence_context();
+}
+
+void TaskManagerNode::request_motor_sequence(
+  const std::string & phase,
+  const std::string & lock_command)
+{
+  if (!active_task_) {
+    publish_lock_status(lock_command, "FAILED", "no active task");
+    return;
+  }
+  if (motor_sequence_pending_) {
+    publish_lock_status(lock_command, "FAILED", "motor sequence is in progress");
+    return;
+  }
+  if (!motor_sequence_client_->action_server_is_ready()) {
+    publish_lock_status(lock_command, "FAILED", "motor sequence action server is unavailable");
+    return;
+  }
+
+  std::string stop_type;
+  if (unlock_phase_ == "ORIGIN") {
+    stop_type = "origin";
+  } else if (unlock_phase_ == "DESTINATION") {
+    stop_type = "destination";
+  } else {
+    publish_lock_status(lock_command, "FAILED", "interaction phase is not ready");
+    return;
+  }
+
+  PendingMotorPhase pending_phase = PendingMotorPhase::NONE;
+  if (phase == "PREPARE") {
+    pending_phase = PendingMotorPhase::PREPARE;
+  } else if (phase == "FINALIZE") {
+    pending_phase = PendingMotorPhase::FINALIZE;
+  } else {
+    publish_lock_status(lock_command, "FAILED", "invalid motor sequence phase");
+    return;
+  }
+
+  ExecuteMotorSequence::Goal goal;
+  goal.task_id = active_task_->task_id;
+  goal.task_type = active_task_->task_type;
+  goal.stop_type = stop_type;
+  goal.phase = phase;
+  goal.order_top = active_task_->order_top == 1 ? 1 : 0;
+  goal.order_bottom = active_task_->order_bottom == 1 ? 1 : 0;
+
+  motor_sequence_pending_ = true;
+  interaction_ready_ = false;
+  pending_motor_phase_ = pending_phase;
+  pending_motor_task_id_ = active_task_->task_id;
+  pending_lock_command_ = lock_command;
+  active_motor_goal_handle_.reset();
+  const uint64_t generation = ++motor_request_generation_;
+  const int64_t task_id = active_task_->task_id;
+
+  rclcpp_action::Client<ExecuteMotorSequence>::SendGoalOptions options;
+  options.goal_response_callback =
+    [this, generation, task_id, pending_phase, lock_command](
+      const MotorGoalHandle::SharedPtr & goal_handle) {
+      on_motor_goal_response(generation, task_id, pending_phase, lock_command, goal_handle);
+    };
+  options.feedback_callback =
+    [this, generation, task_id, pending_phase](
+      MotorGoalHandle::SharedPtr goal_handle,
+      const std::shared_ptr<const ExecuteMotorSequence::Feedback> feedback) {
+      on_motor_feedback(generation, task_id, pending_phase, goal_handle, feedback);
+    };
+  options.result_callback =
+    [this, generation, task_id, pending_phase, lock_command](
+      const MotorGoalHandle::WrappedResult & result) {
+      on_motor_result(generation, task_id, pending_phase, lock_command, result);
+    };
+
+  motor_sequence_client_->async_send_goal(goal, options);
+  RCLCPP_INFO(get_logger(),
+    "Motor sequence requested: task_id=%ld command=%s phase=%s stop_type=%s",
+    task_id, lock_command.c_str(), phase.c_str(), stop_type.c_str());
+}
+
+void TaskManagerNode::on_motor_goal_response(
+  uint64_t generation,
+  int64_t task_id,
+  PendingMotorPhase phase,
+  const std::string & lock_command,
+  const MotorGoalHandle::SharedPtr & goal_handle)
+{
+  std::lock_guard<std::recursive_mutex> lock(state_mutex_);
+  if (!is_current_motor_request(generation, task_id, phase)) {
+    RCLCPP_DEBUG(
+      get_logger(),
+      "Ignoring stale motor goal response: task_id=%ld phase=%s generation=%lu",
+      task_id, pending_motor_phase_to_string(phase).c_str(), generation);
+    return;
+  }
+
+  if (!goal_handle) {
+    const bool was_lock = lock_command == "LOCK";
+    clear_motor_sequence_context();
+    lock_open_ = was_lock;
+    interaction_ready_ = was_lock;
+    publish_lock_status(lock_command, "FAILED", "motor sequence request was rejected");
+    return;
+  }
+
+  active_motor_goal_handle_ = goal_handle;
+  interaction_ready_ = true;
+  RCLCPP_INFO(
+    get_logger(),
+    "Motor %s accepted for task %ld",
+    pending_motor_phase_to_string(phase).c_str(), task_id);
+  publish_lock_status(lock_command, "ACCEPTED");
+}
+
+void TaskManagerNode::on_motor_feedback(
+  uint64_t generation,
+  int64_t task_id,
+  PendingMotorPhase phase,
+  const MotorGoalHandle::SharedPtr & goal_handle,
+  const std::shared_ptr<const ExecuteMotorSequence::Feedback> feedback)
+{
+  (void)goal_handle;
+  std::lock_guard<std::recursive_mutex> lock(state_mutex_);
+  if (!is_current_motor_request(generation, task_id, phase)) {
+    RCLCPP_DEBUG(
+      get_logger(),
+      "Ignoring stale motor feedback: task_id=%ld phase=%s generation=%lu",
+      task_id, pending_motor_phase_to_string(phase).c_str(), generation);
+    return;
+  }
+  RCLCPP_DEBUG(get_logger(),
+    "motor sequence progress: task_id=%ld phase=%s step=%d/%d command=%s",
+    task_id,
+    pending_motor_phase_to_string(phase).c_str(),
+    feedback->current_step,
+    feedback->total_steps,
+    feedback->current_command.c_str());
+}
+
+void TaskManagerNode::on_motor_result(
+  uint64_t generation,
+  int64_t task_id,
+  PendingMotorPhase phase,
+  const std::string & lock_command,
+  const MotorGoalHandle::WrappedResult & result)
+{
+  std::lock_guard<std::recursive_mutex> lock(state_mutex_);
+  if (!is_current_motor_request(generation, task_id, phase)) {
+    RCLCPP_DEBUG(
+      get_logger(),
+      "Ignoring stale motor result: task_id=%ld phase=%s generation=%lu",
+      task_id, pending_motor_phase_to_string(phase).c_str(), generation);
+    return;
+  }
+
+  const bool succeeded =
+    result.code == rclcpp_action::ResultCode::SUCCEEDED &&
+    result.result &&
+    result.result->success;
+
+  std::string message;
+  if (result.result && !result.result->message.empty()) {
+    message = result.result->message;
+  } else {
+    message = phase == PendingMotorPhase::PREPARE ?
+      "motor prepare sequence failed" : "motor finalize sequence failed";
+  }
+
+  if (succeeded) {
+    RCLCPP_INFO(
+      get_logger(),
+      "Motor %s completed for task %ld",
+      pending_motor_phase_to_string(phase).c_str(), task_id);
+    clear_motor_sequence_context();
+    if (lock_command == "UNLOCK") {
+      publish_lock_status(lock_command, "OPENED");
+      handle_lock_opened();
+      interaction_ready_ = true;
+    } else {
+      publish_lock_status(lock_command, "LOCKED");
+      handle_lock_locked();
+      interaction_ready_ = false;
+    }
+    return;
+  }
+
+  const bool was_lock = lock_command == "LOCK";
+  RCLCPP_WARN(
+    get_logger(),
+    "Motor %s failed for task %ld: %s",
+    pending_motor_phase_to_string(phase).c_str(), task_id, message.c_str());
+  clear_motor_sequence_context();
+  lock_open_ = was_lock;
+  interaction_ready_ = was_lock;
+  publish_lock_status(lock_command, "FAILED", message);
+}
+
+void TaskManagerNode::cancel_motor_sequence()
+{
+  auto goal_handle = active_motor_goal_handle_;
+  clear_motor_sequence_context();
+  if (goal_handle && motor_sequence_client_) {
+    motor_sequence_client_->async_cancel_goal(goal_handle);
+  }
+}
+
+void TaskManagerNode::request_motor_sequence_stop()
+{
+  if (!motor_sequence_stop_client_) {
+    RCLCPP_WARN(get_logger(), "motor sequence stop service is unavailable");
+    return;
+  }
+  if (!motor_sequence_stop_client_->service_is_ready()) {
+    RCLCPP_WARN(get_logger(), "motor sequence stop service is unavailable");
+    return;
+  }
+
+  auto request = std::make_shared<std_srvs::srv::Trigger::Request>();
+  try {
+    motor_sequence_stop_client_->async_send_request(
+      request,
+      [this](rclcpp::Client<std_srvs::srv::Trigger>::SharedFuture future) {
+        try {
+          const auto result = future.get();
+          if (result->success) {
+            RCLCPP_WARN(get_logger(), "Motor sequence stop result: %s", result->message.c_str());
+          } else {
+            RCLCPP_ERROR(get_logger(), "Motor sequence stop failed: %s", result->message.c_str());
+          }
+        } catch (const std::exception & e) {
+          RCLCPP_ERROR(get_logger(), "Motor sequence stop response failed: %s", e.what());
+        }
+      });
+    RCLCPP_WARN(get_logger(), "Motor sequence stop requested by emergency");
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(get_logger(), "Motor sequence stop request failed: %s", e.what());
+  }
+}
+
+void TaskManagerNode::clear_motor_sequence_context()
+{
+  ++motor_request_generation_;
+  motor_sequence_pending_ = false;
+  interaction_ready_ = false;
+  pending_motor_phase_ = PendingMotorPhase::NONE;
+  pending_motor_task_id_ = -1;
+  active_motor_goal_handle_.reset();
+  pending_lock_command_.clear();
+}
+
+bool TaskManagerNode::is_current_motor_request(
+  uint64_t generation,
+  int64_t task_id,
+  PendingMotorPhase phase) const
+{
+  return motor_sequence_pending_ &&
+    active_task_ &&
+    active_task_->task_id == task_id &&
+    pending_motor_task_id_ == task_id &&
+    motor_request_generation_ == generation &&
+    pending_motor_phase_ == phase &&
+    state_ != TaskState::EMERGENCY;
+}
+
+bool TaskManagerNode::can_accept_lock_command() const
+{
+  if (!active_task_ || !lock_open_ || pending_finish_after_lock_ || navigation_in_progress_) {
+    return false;
+  }
+  if (state_ == TaskState::EMERGENCY ||
+    state_ == TaskState::IDLE ||
+    state_ == TaskState::TASK_RECEIVED ||
+    state_ == TaskState::MOVING_TO_ORIGIN ||
+    state_ == TaskState::MOVING_TO_DESTINATION)
+  {
+    return false;
+  }
+  if (unlock_phase_ == "ORIGIN") {
+    return state_ == TaskState::LOADING;
+  }
+  if (unlock_phase_ == "DESTINATION") {
+    return state_ == TaskState::UNLOADING;
+  }
+  return false;
+}
+
+std::string TaskManagerNode::pending_motor_phase_to_string(PendingMotorPhase phase)
+{
+  switch (phase) {
+    case PendingMotorPhase::PREPARE:
+      return "PREPARE";
+    case PendingMotorPhase::FINALIZE:
+      return "FINALIZE";
+    case PendingMotorPhase::NONE:
+    default:
+      return "NONE";
+  }
 }
 
 void TaskManagerNode::move_to_destination_after_origin_finish()
@@ -1390,6 +1740,7 @@ void TaskManagerNode::clear_task_context()
 
 void TaskManagerNode::reset_to_idle()
 {
+  cancel_motor_sequence();
   clear_task_context();
   state_ = TaskState::IDLE;
   publish_task_state();

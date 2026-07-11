@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <sstream>
 #include <utility>
 
 namespace robot_task
@@ -12,39 +13,58 @@ namespace
 
 constexpr const char * kActionName = "/robot_task/execute_motor_sequence";
 
+std::string formatMotorSteps(const std::vector<MotorStep> & steps)
+{
+  std::ostringstream out;
+  for (size_t i = 0; i < steps.size(); ++i) {
+    if (i > 0) {
+      out << ", ";
+    }
+    out << steps[i].name << "(" << steps[i].command << ")";
+  }
+  return out.str();
+}
+
 }  // namespace
 
 TaskMotorSequenceNode::TaskMotorSequenceNode(const rclcpp::NodeOptions & options)
 : Node("task_motor_sequence_node", options)
 {
   last_motor_ready_time_ = now();
+  recent_cancel_time_ = now();
   const auto motor_ready_topic =
     declare_parameter<std::string>("motor_ready_topic", "/control/motor_ready");
   const auto motor_service_name =
     declare_parameter<std::string>("motor_service_name", "/control/motor_command");
+  const auto motor_emergency_stop_service_name =
+    declare_parameter<std::string>(
+      "motor_emergency_stop_service_name", "/control/motor_emergency_stop");
+  const auto stop_motor_sequence_service_name =
+    declare_parameter<std::string>(
+      "stop_motor_sequence_service_name", "/robot_task/stop_motor_sequence");
   motor_ready_timeout_sec_ = declare_parameter<double>("motor_ready_timeout_sec", 2.0);
 
-  declare_parameter<std::string>("lift_level_1_command", "1l");
-  declare_parameter<std::string>("lift_level_2_command", "2l");
-  declare_parameter<std::string>("lift_level_3_command", "3l");
-  declare_parameter<std::string>("lift_top_command", "tl");
+  declare_parameter<std::string>("lift_level_1_command", "");
+  declare_parameter<std::string>("lift_level_2_command", "");
+  declare_parameter<std::string>("lift_level_3_command", "");
+  declare_parameter<std::string>("lift_top_command", "LIFT:500");
   declare_parameter<std::string>("lift_stop_command", "k");
   declare_parameter<std::string>("clothes_step_forward_command", "w");
   declare_parameter<std::string>("kit_step_forward_command", "r");
-  declare_parameter<std::string>("servo_1_release_command", "");
-  declare_parameter<std::string>("servo_1_lock_command", "");
-  declare_parameter<std::string>("servo_2_release_command", "");
-  declare_parameter<std::string>("servo_2_lock_command", "");
-  declare_parameter<std::string>("servo_3_release_command", "");
-  declare_parameter<std::string>("servo_3_lock_command", "");
-  declare_parameter<std::string>("servo_4_release_command", "");
-  declare_parameter<std::string>("servo_4_lock_command", "");
-  declare_parameter<std::string>("servo_5_release_command", "");
-  declare_parameter<std::string>("servo_5_lock_command", "");
-  declare_parameter<std::string>("door_open_command", "");
-  declare_parameter<std::string>("door_close_command", "");
+  declare_parameter<std::string>("servo_1_release_command", "1o");
+  declare_parameter<std::string>("servo_1_lock_command", "1c");
+  declare_parameter<std::string>("servo_2_release_command", "2o");
+  declare_parameter<std::string>("servo_2_lock_command", "2c");
+  declare_parameter<std::string>("servo_3_release_command", "3o");
+  declare_parameter<std::string>("servo_3_lock_command", "3c");
+  declare_parameter<std::string>("servo_4_release_command", "4o");
+  declare_parameter<std::string>("servo_4_lock_command", "4c");
+  declare_parameter<std::string>("servo_5_release_command", "5o");
+  declare_parameter<std::string>("servo_5_lock_command", "5c");
+  declare_parameter<std::string>("door_open_command", "o");
+  declare_parameter<std::string>("door_close_command", "c");
   declare_parameter<std::string>("lift_home_command", "");
-  declare_parameter<std::string>("reset_command", "");
+  declare_parameter<std::string>("reset_command", "reset");
 
   motor_ready_sub_ = create_subscription<std_msgs::msg::Bool>(
     motor_ready_topic,
@@ -52,6 +72,13 @@ TaskMotorSequenceNode::TaskMotorSequenceNode(const rclcpp::NodeOptions & options
     std::bind(&TaskMotorSequenceNode::onMotorReady, this, std::placeholders::_1));
 
   motor_command_client_ = create_client<control::srv::MotorCommand>(motor_service_name);
+  motor_emergency_stop_client_ =
+    create_client<std_srvs::srv::Trigger>(motor_emergency_stop_service_name);
+  stop_motor_sequence_srv_ = create_service<std_srvs::srv::Trigger>(
+    stop_motor_sequence_service_name,
+    std::bind(
+      &TaskMotorSequenceNode::handleStopMotorSequence, this,
+      std::placeholders::_1, std::placeholders::_2));
 
   action_server_ = rclcpp_action::create_server<ExecuteMotorSequence>(
     this,
@@ -66,7 +93,9 @@ TaskMotorSequenceNode::TaskMotorSequenceNode(const rclcpp::NodeOptions & options
       &TaskMotorSequenceNode::handleAccepted, this,
       std::placeholders::_1));
 
-  RCLCPP_INFO(get_logger(), "TaskMotorSequenceNode ready: action=%s", kActionName);
+  RCLCPP_INFO(
+    get_logger(), "TaskMotorSequenceNode ready: action=%s stop_service=%s",
+    kActionName, stop_motor_sequence_service_name.c_str());
 }
 
 rclcpp_action::GoalResponse TaskMotorSequenceNode::handleGoal(
@@ -78,6 +107,39 @@ rclcpp_action::GoalResponse TaskMotorSequenceNode::handleGoal(
     get_logger(),
     "Motor sequence goal received: task_id=%ld type=%s stop=%s phase=%s",
     goal->task_id, goal->task_type.c_str(), goal->stop_type.c_str(), goal->phase.c_str());
+
+  auto build_result = buildAndValidateSequence(*goal);
+  if (!build_result.success) {
+    RCLCPP_WARN(
+      get_logger(), "Rejected motor sequence goal: %s", build_result.message.c_str());
+    return rclcpp_action::GoalResponse::REJECT;
+  }
+
+  std::string message;
+  {
+    std::lock_guard<std::mutex> lock(sequence_mutex_);
+    if (sequence_running_ || goal_reserved_) {
+      RCLCPP_WARN(get_logger(), "Motor sequence goal rejected: motor sequence is already running");
+      return rclcpp_action::GoalResponse::REJECT;
+    }
+    if (stop_requested_) {
+      RCLCPP_WARN(get_logger(), "Motor sequence goal rejected: emergency stop is in progress");
+      return rclcpp_action::GoalResponse::REJECT;
+    }
+    if (readyFailureMessageLocked(message)) {
+      RCLCPP_WARN(get_logger(), "Motor sequence goal rejected: %s", message.c_str());
+      return rclcpp_action::GoalResponse::REJECT;
+    }
+    goal_reserved_ = true;
+  }
+
+  if (!motor_command_client_->service_is_ready()) {
+    RCLCPP_WARN(get_logger(), "Motor sequence goal rejected: motor command service is unavailable");
+    std::lock_guard<std::mutex> lock(sequence_mutex_);
+    goal_reserved_ = false;
+    return rclcpp_action::GoalResponse::REJECT;
+  }
+
   return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
 }
 
@@ -92,6 +154,9 @@ rclcpp_action::CancelResponse TaskMotorSequenceNode::handleCancel(
       ++sequence_generation_;
       sequence_running_ = false;
       active_steps_.clear();
+      recent_canceled_step_ = active_step_;
+      recent_cancel_time_ = now();
+      active_step_.reset();
       current_step_index_ = 0;
       active_goal_.reset();
     }
@@ -120,24 +185,99 @@ void TaskMotorSequenceNode::onMotorReady(const std_msgs::msg::Bool::SharedPtr ms
   last_motor_ready_time_ = now();
 }
 
+void TaskMotorSequenceNode::handleStopMotorSequence(
+  const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
+  std::shared_ptr<std_srvs::srv::Trigger::Response> response)
+{
+  (void)request;
+
+  std::shared_ptr<GoalHandleExecuteMotorSequence> goal_handle;
+  bool had_sequence = false;
+  bool should_stop_lift = false;
+  uint64_t generation = 0;
+
+  {
+    std::lock_guard<std::mutex> lock(sequence_mutex_);
+    const bool recent_lift_cancel =
+      recent_canceled_step_ &&
+      recent_canceled_step_->is_lift_command &&
+      (now() - recent_cancel_time_).seconds() <= 2.0;
+    if (!sequence_running_ && !goal_reserved_ && !recent_lift_cancel) {
+      response->success = true;
+      response->message = "no active motor sequence";
+      return;
+    }
+
+    had_sequence = sequence_running_ || recent_lift_cancel;
+    should_stop_lift = (active_step_ && active_step_->is_lift_command) || recent_lift_cancel;
+    generation = ++sequence_generation_;
+    stop_requested_ = should_stop_lift;
+    sequence_running_ = false;
+    goal_reserved_ = false;
+    active_steps_.clear();
+    active_step_.reset();
+    recent_canceled_step_.reset();
+    current_step_index_ = 0;
+    goal_handle = active_goal_;
+    active_goal_.reset();
+  }
+
+  if (goal_handle) {
+    auto result = std::make_shared<ExecuteMotorSequence::Result>();
+    result->success = false;
+    result->message = "motor sequence stopped";
+    if (goal_handle->is_canceling()) {
+      goal_handle->canceled(result);
+    } else {
+      goal_handle->abort(result);
+    }
+  }
+
+  if (!had_sequence) {
+    response->success = true;
+    response->message = "motor sequence reservation canceled";
+    return;
+  }
+
+  if (!should_stop_lift) {
+    response->success = true;
+    response->message = "motor sequence canceled; active motor does not support immediate stop";
+    return;
+  }
+
+  if (!motor_emergency_stop_client_->service_is_ready()) {
+    finishMotorEmergencyStopRequest(generation);
+    response->success = false;
+    response->message = "motor sequence canceled but lift emergency stop service is unavailable";
+    return;
+  }
+
+  requestMotorEmergencyStop(generation);
+  response->success = true;
+  response->message = "motor sequence canceled and lift emergency stop requested";
+}
+
 void TaskMotorSequenceNode::startGoal(
   const std::shared_ptr<GoalHandleExecuteMotorSequence> goal_handle)
 {
   const auto goal = goal_handle->get_goal();
-  MotorPhase phase;
-  std::string message;
-  if (!validateGoal(*goal, phase, message)) {
-    failGoal(goal_handle, message);
+  auto build_result = buildAndValidateSequence(*goal);
+  if (!build_result.success) {
+    std::lock_guard<std::mutex> lock(sequence_mutex_);
+    goal_reserved_ = false;
+    failGoal(goal_handle, build_result.message);
     return;
   }
 
-  std::vector<MotorStep> steps;
-  if (!buildSequence(*goal, phase, steps, message)) {
-    failGoal(goal_handle, message);
-    return;
-  }
-
-  if (steps.empty()) {
+  if (build_result.steps.empty()) {
+    {
+      std::lock_guard<std::mutex> lock(sequence_mutex_);
+      goal_reserved_ = false;
+    }
+    RCLCPP_INFO(
+      get_logger(),
+      "Motor sequence completed: task_id=%ld phase=%s",
+      goal->task_id, goal->phase.c_str());
     auto result = std::make_shared<ExecuteMotorSequence::Result>();
     result->success = true;
     result->message = "no motor sequence required for battery_low";
@@ -145,21 +285,33 @@ void TaskMotorSequenceNode::startGoal(
     return;
   }
 
+  const std::string steps_text = formatMotorSteps(build_result.steps);
+  std::string message;
   uint64_t generation = 0;
   {
     std::lock_guard<std::mutex> lock(sequence_mutex_);
-    if (sequence_running_) {
+    if (!goal_reserved_) {
+      message = "motor sequence canceled before start";
+    } else if (sequence_running_) {
       message = "motor sequence is already running";
+    } else if (stop_requested_) {
+      message = "emergency stop is in progress";
     } else if (readyFailureMessageLocked(message)) {
       // message populated by helper
     } else if (!motor_command_client_->service_is_ready()) {
       message = "motor command service is unavailable";
     } else {
+      goal_reserved_ = false;
       sequence_running_ = true;
       generation = ++sequence_generation_;
       active_goal_ = goal_handle;
-      active_steps_ = std::move(steps);
+      active_steps_ = std::move(build_result.steps);
+      active_step_.reset();
+      recent_canceled_step_.reset();
       current_step_index_ = 0;
+    }
+    if (generation == 0) {
+      goal_reserved_ = false;
     }
   }
 
@@ -167,6 +319,15 @@ void TaskMotorSequenceNode::startGoal(
     failGoal(goal_handle, message);
     return;
   }
+
+  RCLCPP_INFO(
+    get_logger(),
+    "Starting motor sequence: task_id=%ld task_type=%s stop_type=%s phase=%s steps=%s",
+    goal->task_id,
+    goal->task_type.c_str(),
+    goal->stop_type.c_str(),
+    goal->phase.c_str(),
+    steps_text.c_str());
 
   sendNextStep(generation);
 }
@@ -191,6 +352,7 @@ void TaskMotorSequenceNode::sendNextStep(uint64_t generation)
       goal_handle = active_goal_;
     } else {
       step = active_steps_[current_step_index_];
+      active_step_ = step;
       current_step = static_cast<int32_t>(current_step_index_ + 1);
       total_steps = static_cast<int32_t>(active_steps_.size());
       goal_handle = active_goal_;
@@ -212,6 +374,11 @@ void TaskMotorSequenceNode::sendNextStep(uint64_t generation)
   feedback->current_step = current_step;
   feedback->total_steps = total_steps;
   goal_handle->publish_feedback(feedback);
+
+  RCLCPP_INFO(
+    get_logger(),
+    "Motor sequence step %d/%d: name=%s command=%s",
+    current_step, total_steps, step.name.c_str(), step.command.c_str());
 
   auto request = std::make_shared<control::srv::MotorCommand::Request>();
   request->command = step.command;
@@ -250,11 +417,26 @@ void TaskMotorSequenceNode::handleMotorResponse(
   {
     std::lock_guard<std::mutex> lock(sequence_mutex_);
     if (!sequence_running_ || generation != sequence_generation_ || !active_goal_) {
+      RCLCPP_INFO(
+        get_logger(),
+        "Motor sequence stale response ignored: generation=%lu step=%s",
+        generation, step_name.c_str());
       return;
     }
   }
 
   if (!response->success) {
+    if (response->response.find("timeout waiting") != std::string::npos) {
+      RCLCPP_WARN(
+        get_logger(),
+        "Motor sequence timeout: step=%s response=%s",
+        step_name.c_str(), response->response.c_str());
+    } else {
+      RCLCPP_WARN(
+        get_logger(),
+        "Motor sequence step failure: step=%s response=%s",
+        step_name.c_str(), response->response.c_str());
+    }
     finishGoal(
       generation,
       false,
@@ -265,25 +447,70 @@ void TaskMotorSequenceNode::handleMotorResponse(
   {
     std::lock_guard<std::mutex> lock(sequence_mutex_);
     if (!sequence_running_ || generation != sequence_generation_ || !active_goal_) {
+      RCLCPP_INFO(
+        get_logger(),
+        "Motor sequence stale response ignored: generation=%lu step=%s",
+        generation, step_name.c_str());
       return;
     }
     ++current_step_index_;
   }
 
+  RCLCPP_INFO(
+    get_logger(),
+    "Motor sequence step success: step=%s response=%s",
+    step_name.c_str(), response->response.c_str());
   sendNextStep(generation);
 }
 
-void TaskMotorSequenceNode::requestLiftStop()
+void TaskMotorSequenceNode::requestMotorEmergencyStop(uint64_t generation)
 {
-  const auto command = commandParameter("lift_stop_command");
-  if (command.empty() || !motor_command_client_->service_is_ready()) {
-    RCLCPP_WARN(get_logger(), "Lift stop request skipped");
-    return;
+  auto request = std::make_shared<std_srvs::srv::Trigger::Request>();
+  try {
+    motor_emergency_stop_client_->async_send_request(
+      request,
+      [this, generation](rclcpp::Client<std_srvs::srv::Trigger>::SharedFuture future) {
+        try {
+          const auto result = future.get();
+          if (result->success) {
+            RCLCPP_WARN(get_logger(), "Motor emergency stop result: %s", result->message.c_str());
+          } else {
+            RCLCPP_ERROR(get_logger(), "Motor emergency stop failed: %s", result->message.c_str());
+          }
+        } catch (const std::exception & e) {
+          RCLCPP_ERROR(get_logger(), "Motor emergency stop response failed: %s", e.what());
+        }
+        finishMotorEmergencyStopRequest(generation);
+      });
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(get_logger(), "Motor emergency stop request failed: %s", e.what());
+    finishMotorEmergencyStopRequest(generation);
+  }
+}
+
+void TaskMotorSequenceNode::finishMotorEmergencyStopRequest(uint64_t generation)
+{
+  std::lock_guard<std::mutex> lock(sequence_mutex_);
+  if (generation == sequence_generation_) {
+    stop_requested_ = false;
+  }
+}
+
+SequenceBuildResult TaskMotorSequenceNode::buildAndValidateSequence(
+  const ExecuteMotorSequence::Goal & goal) const
+{
+  MotorPhase phase;
+  std::string message;
+  if (!validateGoal(goal, phase, message)) {
+    return SequenceBuildResult{false, message, {}};
   }
 
-  auto request = std::make_shared<control::srv::MotorCommand::Request>();
-  request->command = command;
-  motor_command_client_->async_send_request(request);
+  std::vector<MotorStep> steps;
+  if (!buildSequence(goal, phase, steps, message)) {
+    return SequenceBuildResult{false, message, {}};
+  }
+
+  return SequenceBuildResult{true, "", std::move(steps)};
 }
 
 bool TaskMotorSequenceNode::validateGoal(
@@ -291,6 +518,11 @@ bool TaskMotorSequenceNode::validateGoal(
   MotorPhase & phase,
   std::string & message) const
 {
+  if (goal.task_id <= 0) {
+    message = "invalid task_id";
+    return false;
+  }
+
   if (goal.phase == "PREPARE") {
     phase = MotorPhase::PREPARE;
   } else if (goal.phase == "FINALIZE") {
@@ -346,7 +578,7 @@ bool TaskMotorSequenceNode::buildSequence(
   const ExecuteMotorSequence::Goal & goal,
   MotorPhase phase,
   std::vector<MotorStep> & steps,
-  std::string & message)
+  std::string & message) const
 {
   if (goal.task_type == "battery_low") {
     return true;
@@ -436,7 +668,7 @@ bool TaskMotorSequenceNode::addStep(
   const std::string & name,
   const std::string & command_parameter,
   bool is_lift_command,
-  std::string & message)
+  std::string & message) const
 {
   const auto command = commandParameter(command_parameter);
   if (command.empty()) {
@@ -497,15 +729,19 @@ void TaskMotorSequenceNode::finishGoal(
   const std::string & message)
 {
   std::shared_ptr<GoalHandleExecuteMotorSequence> goal_handle;
+  std::optional<MotorStep> step;
   {
     std::lock_guard<std::mutex> lock(sequence_mutex_);
     if (!sequence_running_ || generation != sequence_generation_ || !active_goal_) {
       return;
     }
     goal_handle = active_goal_;
+    step = active_step_;
     ++sequence_generation_;
     sequence_running_ = false;
     active_steps_.clear();
+    active_step_.reset();
+    recent_canceled_step_.reset();
     current_step_index_ = 0;
     active_goal_.reset();
   }
@@ -513,6 +749,21 @@ void TaskMotorSequenceNode::finishGoal(
   auto result = std::make_shared<ExecuteMotorSequence::Result>();
   result->success = success;
   result->message = message;
+  const auto goal = goal_handle->get_goal();
+  if (success) {
+    RCLCPP_INFO(
+      get_logger(),
+      "Motor sequence completed: task_id=%ld phase=%s",
+      goal->task_id, goal->phase.c_str());
+  } else {
+    RCLCPP_WARN(
+      get_logger(),
+      "Motor sequence failed: task_id=%ld phase=%s step=%s response=%s",
+      goal->task_id,
+      goal->phase.c_str(),
+      step ? step->name.c_str() : "none",
+      message.c_str());
+  }
   if (success) {
     goal_handle->succeed(result);
   } else if (goal_handle->is_canceling()) {

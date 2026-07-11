@@ -21,8 +21,11 @@
 #include <nlohmann/json.hpp>
 
 #include "rclcpp/rclcpp.hpp"
+#include "rclcpp_action/rclcpp_action.hpp"
 #include "geometry_msgs/msg/twist.hpp"
 #include "std_msgs/msg/string.hpp"
+#include "std_srvs/srv/trigger.hpp"
+#include "robot_task/action/execute_motor_sequence.hpp"
 #include "robot_task/location_mapper.hpp"
 
 namespace robot_task
@@ -64,6 +67,16 @@ public:
   explicit TaskManagerNode(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
 
 private:
+  using ExecuteMotorSequence = robot_task::action::ExecuteMotorSequence;
+  using MotorGoalHandle = rclcpp_action::ClientGoalHandle<ExecuteMotorSequence>;
+
+  enum class PendingMotorPhase
+  {
+    NONE,
+    PREPARE,
+    FINALIZE
+  };
+
   // ── Subscribers ─────────────────────────────────────────
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr sub_task_assign_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr sub_task_cancel_;
@@ -85,6 +98,8 @@ private:
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_error_event_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_lock_status_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr pub_cmd_vel_;
+  rclcpp_action::Client<ExecuteMotorSequence>::SharedPtr motor_sequence_client_;
+  rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr motor_sequence_stop_client_;
 
   // ── Timers ──────────────────────────────────────────────
   rclcpp::TimerBase::SharedPtr loading_timer_;
@@ -107,6 +122,13 @@ private:
   bool                      lock_open_{false};
   bool                      pending_finish_after_lock_{false};
   bool                      pending_destination_after_lock_{false};
+  bool                      motor_sequence_pending_{false};
+  bool                      interaction_ready_{false};
+  PendingMotorPhase         pending_motor_phase_{PendingMotorPhase::NONE};
+  int64_t                   pending_motor_task_id_{-1};
+  uint64_t                  motor_request_generation_{0};
+  MotorGoalHandle::SharedPtr active_motor_goal_handle_;
+  std::string               pending_lock_command_;
 
   // ── Callbacks ───────────────────────────────────────────
   void on_task_assign(const std_msgs::msg::String::SharedPtr msg);
@@ -146,6 +168,36 @@ private:
   void handle_lock_locked();
   void close_lock_before_finish();
   void clear_interaction_context();
+  void request_motor_sequence(
+    const std::string & phase,
+    const std::string & lock_command);
+  void on_motor_goal_response(
+    uint64_t generation,
+    int64_t task_id,
+    PendingMotorPhase phase,
+    const std::string & lock_command,
+    const MotorGoalHandle::SharedPtr & goal_handle);
+  void on_motor_feedback(
+    uint64_t generation,
+    int64_t task_id,
+    PendingMotorPhase phase,
+    const MotorGoalHandle::SharedPtr & goal_handle,
+    const std::shared_ptr<const ExecuteMotorSequence::Feedback> feedback);
+  void on_motor_result(
+    uint64_t generation,
+    int64_t task_id,
+    PendingMotorPhase phase,
+    const std::string & lock_command,
+    const MotorGoalHandle::WrappedResult & result);
+  void cancel_motor_sequence();
+  void request_motor_sequence_stop();
+  void clear_motor_sequence_context();
+  bool is_current_motor_request(
+    uint64_t generation,
+    int64_t task_id,
+    PendingMotorPhase phase) const;
+  bool can_accept_lock_command() const;
+  static std::string pending_motor_phase_to_string(PendingMotorPhase phase);
   void move_to_destination_after_origin_finish();
   void finish_task_from_server();
   void clear_task_context();
