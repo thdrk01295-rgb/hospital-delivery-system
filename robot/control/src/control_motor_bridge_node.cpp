@@ -557,15 +557,16 @@ private:
 
   double timeoutForCommand(const std::string & command) const
   {
-    if (isLiftPositionAliasCommand(command)) {
+    if (usesLiftCommandTimeout(command)) {
       return lift_command_timeout_sec_;
     }
     return timeout_sec_;
   }
 
-  bool isLiftPositionAliasCommand(const std::string & command) const
+  bool usesLiftCommandTimeout(const std::string & command) const
   {
-    return command == "1l" || command == "2l" || command == "3l" || command == "tl";
+    return command == "1l" || command == "2l" || command == "3l" ||
+           command == "tl" || command == "hl";
   }
 
   std::string serial_port_;
