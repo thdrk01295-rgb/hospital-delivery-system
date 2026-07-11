@@ -191,7 +191,7 @@ TEST_F(TaskMotorSequenceNodeTest, SupportedTaskPhaseLookupTableIsComplete)
     {"kit_refill", "destination", "PREPARE", {"2o"}},
     {"kit_refill", "destination", "FINALIZE", {"2c"}},
     {"kit_delivery", "destination", "PREPARE", {"3l", "r", "tl"}},
-    {"kit_delivery", "destination", "FINALIZE", {"hl"}},
+    {"kit_delivery", "destination", "FINALIZE", {}},
     {"specimen_delivery", "origin", "PREPARE", {"1o"}},
     {"specimen_delivery", "origin", "FINALIZE", {"1c"}},
     {"specimen_delivery", "destination", "PREPARE", {"1o"}},
@@ -217,12 +217,12 @@ TEST_F(TaskMotorSequenceNodeTest, SupportedTaskPhaseLookupTableIsComplete)
   }
 }
 
-TEST_F(TaskMotorSequenceNodeTest, PatientRentalFinalizeKeepsDoorCloseAndLiftHome)
+TEST_F(TaskMotorSequenceNodeTest, PatientRentalFinalizeKeepsDoorCloseOnly)
 {
   auto goal = rentalGoal(1, 1);
   goal.phase = "FINALIZE";
 
-  EXPECT_EQ(commandsFor(goal), (std::vector<std::string>{"c", "hl"}));
+  EXPECT_EQ(commandsFor(goal), (std::vector<std::string>{"c"}));
 }
 
 TEST_F(TaskMotorSequenceNodeTest, RejectsMissingSelectedClothingCommand)

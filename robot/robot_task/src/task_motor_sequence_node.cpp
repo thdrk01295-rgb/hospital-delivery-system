@@ -311,7 +311,7 @@ void TaskMotorSequenceNode::startGoal(
       sequenceKey(goal->task_type, goal->stop_type, goal->phase).c_str());
     auto result = std::make_shared<ExecuteMotorSequence::Result>();
     result->success = true;
-    result->message = "no motor sequence required for battery_low";
+    result->message = "no motor sequence required";
     goal_handle->succeed(result);
     return;
   }
@@ -641,7 +641,7 @@ bool TaskMotorSequenceNode::buildSequence(
         addStep(steps, "kit_step_forward", "kit_step_forward_command", false, message) &&
         addStep(steps, "lift_top", "lift_top_command", true, message);
     }
-    return addStep(steps, "lift_home", "lift_home_command", true, message);
+    return true;
   }
 
   if (goal.task_type == "specimen_delivery" || goal.task_type == "logistics_delivery") {
@@ -698,8 +698,7 @@ bool TaskMotorSequenceNode::buildSequence(
       }
       return true;
     }
-    return addStep(steps, "door_close", "door_close_command", false, message) &&
-      addStep(steps, "lift_home", "lift_home_command", true, message);
+    return addStep(steps, "door_close", "door_close_command", false, message);
   }
 
   if (goal.task_type == "patient_clothes_return") {
