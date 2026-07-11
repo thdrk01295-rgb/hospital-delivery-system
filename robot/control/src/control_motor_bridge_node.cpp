@@ -193,6 +193,7 @@ public:
     baud_rate_ = declare_parameter<int>("baud_rate", 115200);
     timeout_sec_ = declare_parameter<double>("timeout_sec", 10.0);
     lift_command_timeout_sec_ = declare_parameter<double>("lift_command_timeout_sec", 15.0);
+    reset_command_timeout_sec_ = declare_parameter<double>("reset_command_timeout_sec", 25.0);
     require_ready_ = declare_parameter<bool>("require_ready", true);
     emergency_stop_command_ = declare_parameter<std::string>("emergency_stop_command", "k");
 
@@ -557,6 +558,9 @@ private:
 
   double timeoutForCommand(const std::string & command) const
   {
+    if (command == "reset") {
+      return reset_command_timeout_sec_;
+    }
     if (usesLiftCommandTimeout(command)) {
       return lift_command_timeout_sec_;
     }
@@ -573,6 +577,7 @@ private:
   int baud_rate_;
   double timeout_sec_;
   double lift_command_timeout_sec_;
+  double reset_command_timeout_sec_;
   bool require_ready_;
   std::string emergency_stop_command_;
 
