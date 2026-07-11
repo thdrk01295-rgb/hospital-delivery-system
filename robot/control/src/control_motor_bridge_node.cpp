@@ -189,9 +189,10 @@ public:
     command_finished_(false),
     command_success_(false)
   {
-    serial_port_ = declare_parameter<std::string>("serial_port", "/dev/ttyACM1");
+    serial_port_ = declare_parameter<std::string>("serial_port", "/dev/ttyACM0");
     baud_rate_ = declare_parameter<int>("baud_rate", 115200);
     timeout_sec_ = declare_parameter<double>("timeout_sec", 10.0);
+    lift_command_timeout_sec_ = declare_parameter<double>("lift_command_timeout_sec", 15.0);
     require_ready_ = declare_parameter<bool>("require_ready", true);
     emergency_stop_command_ = declare_parameter<std::string>("emergency_stop_command", "k");
 
@@ -287,9 +288,11 @@ private:
       return;
     }
 
+    const double applied_timeout_sec = timeoutForCommand(command);
+
     std::unique_lock<std::mutex> lock(command_mutex_);
     const bool completed = command_cv_.wait_for(
-      lock, std::chrono::duration<double>(timeout_sec_),
+      lock, std::chrono::duration<double>(applied_timeout_sec),
       [this]() { return command_finished_; });
 
     if (completed) {
@@ -298,6 +301,11 @@ private:
     } else {
       response->success = false;
       response->response = "timeout waiting for motor controller response";
+      RCLCPP_WARN(
+        get_logger(),
+        "Timeout waiting for motor controller response: command='%s', timeout=%.3f sec",
+        command.c_str(),
+        applied_timeout_sec);
     }
 
     command_in_progress_ = false;
@@ -547,9 +555,23 @@ private:
     publishReady(connected_.load() && ready_.load());
   }
 
+  double timeoutForCommand(const std::string & command) const
+  {
+    if (isLiftPositionAliasCommand(command)) {
+      return lift_command_timeout_sec_;
+    }
+    return timeout_sec_;
+  }
+
+  bool isLiftPositionAliasCommand(const std::string & command) const
+  {
+    return command == "1l" || command == "2l" || command == "3l" || command == "tl";
+  }
+
   std::string serial_port_;
   int baud_rate_;
   double timeout_sec_;
+  double lift_command_timeout_sec_;
   bool require_ready_;
   std::string emergency_stop_command_;
 
