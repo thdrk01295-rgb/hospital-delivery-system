@@ -12,7 +12,8 @@ task_motor_sequence_node:
     lift_top_command: "tl"
     lift_stop_command: "k"
 
-    clothes_step_forward_command: "w"
+    top_clothes_step_forward_command: "w"
+    bottom_clothes_step_forward_command: "e"
     kit_step_forward_command: "r"
 
     servo_1_release_command: "1o"

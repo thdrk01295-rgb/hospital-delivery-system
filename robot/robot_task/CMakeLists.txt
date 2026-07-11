@@ -104,7 +104,29 @@ install(DIRECTORY launch/
 
 # ── Linting (optional) ────────────────────────────────────────
 if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
   find_package(ament_lint_auto REQUIRED)
+
+  ament_add_gtest(task_motor_sequence_node_test
+    test/task_motor_sequence_node_test.cpp
+    src/task_motor_sequence_node.cpp
+  )
+  if(TARGET task_motor_sequence_node_test)
+    target_compile_definitions(task_motor_sequence_node_test
+      PRIVATE ROBOT_TASK_ENABLE_SEQUENCE_TESTING
+    )
+    ament_target_dependencies(task_motor_sequence_node_test
+      rclcpp
+      rclcpp_action
+      std_msgs
+      std_srvs
+      control
+    )
+    target_link_libraries(task_motor_sequence_node_test
+      "${cpp_typesupport_target}"
+    )
+  endif()
+
   ament_lint_auto_find_test_dependencies()
 endif()
 

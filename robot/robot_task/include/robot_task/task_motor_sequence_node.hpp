@@ -48,6 +48,14 @@ public:
 
   explicit TaskMotorSequenceNode(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
 
+#ifdef ROBOT_TASK_ENABLE_SEQUENCE_TESTING
+  SequenceBuildResult buildAndValidateSequenceForTest(
+    const ExecuteMotorSequence::Goal & goal) const
+  {
+    return buildAndValidateSequence(goal);
+  }
+#endif
+
 private:
   rclcpp_action::GoalResponse handleGoal(
     const rclcpp_action::GoalUUID & uuid,

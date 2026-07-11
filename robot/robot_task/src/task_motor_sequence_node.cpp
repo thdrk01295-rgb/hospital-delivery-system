@@ -49,7 +49,8 @@ TaskMotorSequenceNode::TaskMotorSequenceNode(const rclcpp::NodeOptions & options
   declare_parameter<std::string>("lift_level_3_command", "");
   declare_parameter<std::string>("lift_top_command", "LIFT:500");
   declare_parameter<std::string>("lift_stop_command", "k");
-  declare_parameter<std::string>("clothes_step_forward_command", "w");
+  declare_parameter<std::string>("top_clothes_step_forward_command", "w");
+  declare_parameter<std::string>("bottom_clothes_step_forward_command", "e");
   declare_parameter<std::string>("kit_step_forward_command", "r");
   declare_parameter<std::string>("servo_1_release_command", "1o");
   declare_parameter<std::string>("servo_1_lock_command", "1c");
@@ -632,7 +633,12 @@ bool TaskMotorSequenceNode::buildSequence(
       }
       if (goal.order_top == 1) {
         if (!addStep(steps, "lift_level_1", "lift_level_1_command", true, message) ||
-          !addStep(steps, "clothes_step_forward", "clothes_step_forward_command", false, message) ||
+          !addStep(
+            steps,
+            "top_clothes_step_forward",
+            "top_clothes_step_forward_command",
+            false,
+            message) ||
           !addStep(steps, "lift_top", "lift_top_command", true, message))
         {
           return false;
@@ -640,7 +646,12 @@ bool TaskMotorSequenceNode::buildSequence(
       }
       if (goal.order_bottom == 1) {
         if (!addStep(steps, "lift_level_2", "lift_level_2_command", true, message) ||
-          !addStep(steps, "clothes_step_forward", "clothes_step_forward_command", false, message) ||
+          !addStep(
+            steps,
+            "bottom_clothes_step_forward",
+            "bottom_clothes_step_forward_command",
+            false,
+            message) ||
           !addStep(steps, "lift_top", "lift_top_command", true, message))
         {
           return false;
