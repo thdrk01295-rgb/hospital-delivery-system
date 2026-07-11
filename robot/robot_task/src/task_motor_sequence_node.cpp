@@ -641,7 +641,7 @@ bool TaskMotorSequenceNode::buildSequence(
         addStep(steps, "kit_step_forward", "kit_step_forward_command", false, message) &&
         addStep(steps, "lift_top", "lift_top_command", true, message);
     }
-    return true;
+    return addStep(steps, "lift_level_3", "lift_level_3_command", true, message);
   }
 
   if (goal.task_type == "specimen_delivery" || goal.task_type == "logistics_delivery") {
@@ -698,7 +698,8 @@ bool TaskMotorSequenceNode::buildSequence(
       }
       return true;
     }
-    return addStep(steps, "door_close", "door_close_command", false, message);
+    return addStep(steps, "door_close", "door_close_command", false, message) &&
+      addStep(steps, "lift_level_3", "lift_level_3_command", true, message);
   }
 
   if (goal.task_type == "patient_clothes_return") {
