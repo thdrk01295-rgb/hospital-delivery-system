@@ -207,6 +207,8 @@ public:
       std::bind(
         &ControlMotorBridgeNode::handleEmergencyStop, this,
         std::placeholders::_1, std::placeholders::_2));
+    ready_timer_ = create_wall_timer(
+      1s, std::bind(&ControlMotorBridgeNode::publishPeriodicReady, this));
 
     publishReady(false);
     read_thread_ = std::thread(&ControlMotorBridgeNode::serialReadLoop, this);
@@ -215,10 +217,14 @@ public:
   ~ControlMotorBridgeNode() override
   {
     running_ = false;
+    if (ready_timer_) {
+      ready_timer_->cancel();
+    }
     if (read_thread_.joinable()) {
       read_thread_.join();
     }
     closeSerial();
+    publishReady(false);
   }
 
 private:
@@ -387,6 +393,7 @@ private:
       close(serial_fd_);
       serial_fd_ = -1;
     }
+    ready_ = false;
     connected_ = false;
   }
 
@@ -422,7 +429,6 @@ private:
     while (running_) {
       if (!connected_.load()) {
         ready_ = false;
-        publishReady(false);
         if (!openSerial()) {
           std::this_thread::sleep_for(1s);
         }
@@ -457,6 +463,10 @@ private:
         buffer.clear();
       }
     }
+
+    ready_ = false;
+    connected_ = false;
+    publishReady(false);
   }
 
   void processBuffer(std::string & buffer)
@@ -521,6 +531,11 @@ private:
     ready_pub_->publish(msg);
   }
 
+  void publishPeriodicReady()
+  {
+    publishReady(connected_.load() && ready_.load());
+  }
+
   std::string serial_port_;
   int baud_rate_;
   double timeout_sec_;
@@ -531,6 +546,7 @@ private:
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr ready_pub_;
   rclcpp::Service<control::srv::MotorCommand>::SharedPtr command_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr emergency_stop_srv_;
+  rclcpp::TimerBase::SharedPtr ready_timer_;
 
   int serial_fd_;
   std::mutex serial_mutex_;
