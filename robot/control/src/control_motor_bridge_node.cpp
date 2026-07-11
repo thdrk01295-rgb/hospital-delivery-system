@@ -2,6 +2,7 @@
 #include <termios.h>
 #include <unistd.h>
 
+#include <rclcpp/executors/multi_threaded_executor.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/string.hpp>
@@ -194,6 +195,10 @@ public:
     require_ready_ = declare_parameter<bool>("require_ready", true);
     emergency_stop_command_ = declare_parameter<std::string>("emergency_stop_command", "k");
 
+    service_callback_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    ready_timer_callback_group_ =
+      create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+
     feedback_pub_ = create_publisher<std_msgs::msg::String>("/control/motor_feedback", 50);
     ready_pub_ = create_publisher<std_msgs::msg::Bool>(
       "/control/motor_ready", rclcpp::QoS(1).transient_local().reliable());
@@ -201,14 +206,20 @@ public:
       "/control/motor_command",
       std::bind(
         &ControlMotorBridgeNode::handleCommand, this,
-        std::placeholders::_1, std::placeholders::_2));
+        std::placeholders::_1, std::placeholders::_2),
+      rclcpp::ServicesQoS(),
+      service_callback_group_);
     emergency_stop_srv_ = create_service<std_srvs::srv::Trigger>(
       "/control/motor_emergency_stop",
       std::bind(
         &ControlMotorBridgeNode::handleEmergencyStop, this,
-        std::placeholders::_1, std::placeholders::_2));
+        std::placeholders::_1, std::placeholders::_2),
+      rclcpp::ServicesQoS(),
+      service_callback_group_);
     ready_timer_ = create_wall_timer(
-      1s, std::bind(&ControlMotorBridgeNode::publishPeriodicReady, this));
+      1s,
+      std::bind(&ControlMotorBridgeNode::publishPeriodicReady, this),
+      ready_timer_callback_group_);
 
     publishReady(false);
     read_thread_ = std::thread(&ControlMotorBridgeNode::serialReadLoop, this);
@@ -547,6 +558,8 @@ private:
   rclcpp::Service<control::srv::MotorCommand>::SharedPtr command_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr emergency_stop_srv_;
   rclcpp::TimerBase::SharedPtr ready_timer_;
+  rclcpp::CallbackGroup::SharedPtr service_callback_group_;
+  rclcpp::CallbackGroup::SharedPtr ready_timer_callback_group_;
 
   int serial_fd_;
   std::mutex serial_mutex_;
@@ -573,7 +586,9 @@ int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
   auto node = std::make_shared<control::ControlMotorBridgeNode>();
-  rclcpp::spin(node);
+  rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(), 2);
+  executor.add_node(node);
+  executor.spin();
   rclcpp::shutdown();
   return 0;
 }
