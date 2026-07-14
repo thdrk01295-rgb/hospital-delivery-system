@@ -34,6 +34,9 @@ Panels:
       - /Current View1
     Splitter Ratio: 0.5
 
+  - Class: nav2_rviz_plugins/Navigation 2
+    Name: Navigation 2
+
 Visualization Manager:
   Class: ""
   Global Options:
@@ -141,17 +144,6 @@ Visualization Manager:
       Color: 255; 140; 0
       Alpha: 1
 
-    - Class: rviz_default_plugins/Odometry
-      Name: Filtered Odometry
-      Enabled: true
-      Topic:
-        Value: /odometry/filtered
-      Shape:
-        Value: Arrow
-      Color: 255; 25; 0
-      Alpha: 1
-      Keep: 100
-
     - Class: rviz_default_plugins/Axes
       Name: Base Footprint Axes
       Enabled: true
@@ -161,16 +153,23 @@ Visualization Manager:
 
   Tools:
     - Class: rviz_default_plugins/Interact
+
     - Class: rviz_default_plugins/MoveCamera
+
     - Class: rviz_default_plugins/Select
+
     - Class: rviz_default_plugins/FocusCamera
+
     - Class: rviz_default_plugins/Measure
+
     - Class: rviz_default_plugins/SetInitialPose
       Topic:
         Value: /initialpose
+
     - Class: rviz_default_plugins/SetGoal
       Topic:
         Value: /goal_pose
+
     - Class: rviz_default_plugins/PublishPoint
       Topic:
         Value: /clicked_point

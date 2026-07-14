@@ -57,7 +57,7 @@ def generate_launch_description():
     default_laser_filter_params_file = os.path.join(
         lidar_share,
         'config',
-        'front_180_laser_filter.yaml'
+        'use_37to300_laser_filter.yaml'
     )
 
     robot_description = ParameterValue(

@@ -25,6 +25,7 @@ def generate_launch_description():
     imu_params_file = LaunchConfiguration('imu_params_file')
     ekf_params_file = LaunchConfiguration('ekf_params_file')
     tof_params_file = LaunchConfiguration('tof_params_file')
+    tof_obstacle_params_file = LaunchConfiguration('tof_obstacle_params_file')
     collision_guard_params_file = LaunchConfiguration('collision_guard_params_file')
     laser_filter_params_file = LaunchConfiguration('laser_filter_params_file')
     laser_filter_input_topic = LaunchConfiguration('laser_filter_input_topic')
@@ -38,7 +39,7 @@ def generate_launch_description():
     default_map_yaml = os.path.join(
         slam_dir,
         'maps',
-        '0521.yaml'
+        'hospital_map.yaml'
     )
     default_encoder_params_file = os.path.join(
         control_dir,
@@ -60,6 +61,11 @@ def generate_launch_description():
         'config',
         'tof_params.yaml'
     )
+    default_tof_obstacle_params_file = os.path.join(
+        sensor_dir,
+        'config',
+        'tof_obstacle_params.yaml'
+    )
     default_collision_guard_params_file = os.path.join(
         sensor_dir,
         'config',
@@ -73,7 +79,7 @@ def generate_launch_description():
     default_laser_filter_params_file = os.path.join(
         lidar_dir,
         'config',
-        'front_180_laser_filter.yaml'
+        'use_37to300_laser_filter.yaml'
     )
 
     robot_description = ParameterValue(
@@ -148,6 +154,10 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'tof_params_file',
             default_value=default_tof_params_file
+        ),
+        DeclareLaunchArgument(
+            'tof_obstacle_params_file',
+            default_value=default_tof_obstacle_params_file
         ),
         DeclareLaunchArgument(
             'collision_guard_params_file',
@@ -286,6 +296,16 @@ def generate_launch_description():
             output='screen',
             parameters=[
                 tof_params_file,
+                {'use_sim_time': use_sim_time}
+            ]
+        ),
+        Node(
+            package='sensor_components',
+            executable='tof_obstacle_node',
+            name='tof_obstacle_node',
+            output='screen',
+            parameters=[
+                tof_obstacle_params_file,
                 {'use_sim_time': use_sim_time}
             ]
         ),
