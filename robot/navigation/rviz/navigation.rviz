@@ -15,10 +15,7 @@ Panels:
         - /Global Plan1
         - /Local Plan1
       Splitter Ratio: 0.5
-    Tree Height: 600
-
-  - Class: rviz_common/Selection
-    Name: Selection
+    Tree Height: 1100
 
   - Class: rviz_common/Tool Properties
     Name: Tool Properties

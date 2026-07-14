@@ -41,19 +41,19 @@ CollisionGuardNode::CollisionGuardNode()
   min_range_(declare_parameter<double>("min_range", 0.03)),
   max_valid_range_(declare_parameter<double>("max_valid_range", 1.2)),
   sentinel_invalid_range_(declare_parameter<double>("sentinel_invalid_range", 8.0)),
-  sensor_timeout_sec_(declare_parameter<double>("sensor_timeout_sec", 0.35)),
+  sensor_timeout_sec_(declare_parameter<double>("sensor_timeout_sec", 0.50)),
   status_publish_period_sec_(declare_parameter<double>("status_publish_period_sec", 0.5)),
   linear_deadband_(declare_parameter<double>("linear_deadband", 0.01)),
   reverse_deadband_(declare_parameter<double>("reverse_deadband", 0.01)),
-  rotate_deadband_(declare_parameter<double>("rotate_deadband", 0.03)),
-  reverse_stop_distance_(declare_parameter<double>("reverse_stop_distance", 0.25)),
-  reverse_slow_distance_(declare_parameter<double>("reverse_slow_distance", 0.45)),
-  side_stop_distance_(declare_parameter<double>("side_stop_distance", 0.18)),
-  side_slow_distance_(declare_parameter<double>("side_slow_distance", 0.35)),
-  rotate_stop_distance_(declare_parameter<double>("rotate_stop_distance", 0.22)),
-  rotate_slow_distance_(declare_parameter<double>("rotate_slow_distance", 0.40)),
+  rotate_deadband_(declare_parameter<double>("rotate_deadband", 0.05)),
+  reverse_stop_distance_(declare_parameter<double>("reverse_stop_distance", 0.22)),
+  reverse_slow_distance_(declare_parameter<double>("reverse_slow_distance", 0.38)),
+  side_stop_distance_(declare_parameter<double>("side_stop_distance", 0.14)),
+  side_slow_distance_(declare_parameter<double>("side_slow_distance", 0.25)),
+  rotate_stop_distance_(declare_parameter<double>("rotate_stop_distance", 0.16)),
+  rotate_slow_distance_(declare_parameter<double>("rotate_slow_distance", 0.28)),
   reverse_limited_speed_abs_(declare_parameter<double>("reverse_limited_speed_abs", 0.03)),
-  rotate_limited_speed_abs_(declare_parameter<double>("rotate_limited_speed_abs", 0.15)),
+  rotate_limited_speed_abs_(declare_parameter<double>("rotate_limited_speed_abs", 0.10)),
   last_status_publish_(0, 0, get_clock()->get_clock_type())
 {
   sensors_[static_cast<std::size_t>(SensorIndex::kFrontLeft)].name = "front_left";
@@ -112,320 +112,51 @@ void CollisionGuardNode::rangeCallback(
 void CollisionGuardNode::cmdVelCallback(const geometry_msgs::msg::Twist::SharedPtr msg)
 {
   const auto now = get_clock()->now();
-  std::array<SensorView, kSensorCount> views;
-  for (std::size_t i = 0; i < views.size(); ++i) {
-    views[i] = sensorView(static_cast<SensorIndex>(i), now);
+  std::array<SensorSnapshot, kSensorCount> snapshots;
+  for (std::size_t i = 0; i < snapshots.size(); ++i) {
+    snapshots[i] = sensorSnapshot(static_cast<SensorIndex>(i), now);
   }
 
   geometry_msgs::msg::Twist output = *msg;
-  GuardStatus status{"idle", "pass", false, "none", kUnknownDistance, "ok"};
-
-  const bool reversing = msg->linear.x < -reverse_deadband_;
-  const bool rotating =
-    std::abs(msg->angular.z) > rotate_deadband_ &&
-    (std::abs(msg->linear.x) < linear_deadband_ || reversing);
-
-  if (rotating) {
-    applyRotateGuard(output, views, status);
-  }
-  if (reversing) {
-    applyReverseGuard(output, views, msg->angular.z, status);
-  }
-  if (!reversing && !rotating && std::abs(msg->linear.x) >= linear_deadband_) {
-    status.mode = "forward";
-  }
+  const auto decision =
+    evaluateCollisionGuard(msg->linear.x, msg->angular.z, snapshots, guardConfig());
+  output.linear.x = decision.linear_x;
+  output.angular.z = decision.angular_z;
 
   cmd_pub_->publish(output);
-  publishStatus(status, now);
+  publishStatus(decision.status, now);
 }
 
-CollisionGuardNode::SensorView CollisionGuardNode::sensorView(
+SensorSnapshot CollisionGuardNode::sensorSnapshot(
   SensorIndex index,
   const rclcpp::Time & now) const
 {
   const auto & sensor = sensors_[static_cast<std::size_t>(index)];
-  if (!sensor.last_msg) {
-    return {SensorValidity::kMissing, kUnknownDistance, "missing"};
-  }
-  if ((now - sensor.last_received).seconds() > sensor_timeout_sec_) {
-    return {SensorValidity::kTimeout, kUnknownDistance, "timeout"};
-  }
-
-  const double range = sensor.last_msg->range;
-  if (!std::isfinite(range)) {
-    return {SensorValidity::kInvalid, kUnknownDistance, "non_finite"};
-  }
-  if (range <= 0.0 || range < min_range_) {
-    return {SensorValidity::kInvalid, range, "below_min"};
-  }
-  if (range >= sentinel_invalid_range_) {
-    return {SensorValidity::kInvalid, range, "sentinel"};
-  }
-  if (range > max_valid_range_) {
-    return {SensorValidity::kInvalid, range, "above_max"};
-  }
-
-  return {SensorValidity::kValid, range, "ok"};
+  const bool has_sample = static_cast<bool>(sensor.last_msg);
+  const double age_sec = has_sample ? (now - sensor.last_received).seconds() : 0.0;
+  const double range = has_sample ? sensor.last_msg->range : kUnknownDistance;
+  return {sensor.name, classifySensorSample(has_sample, age_sec, range, guardConfig())};
 }
 
-bool CollisionGuardNode::sensorIsStop(const SensorView & sensor, double stop_distance) const
+GuardConfig CollisionGuardNode::guardConfig() const
 {
-  return sensor.validity == SensorValidity::kValid && sensor.distance <= stop_distance;
-}
-
-bool CollisionGuardNode::sensorIsSlow(const SensorView & sensor, double slow_distance) const
-{
-  return sensor.validity == SensorValidity::kValid && sensor.distance <= slow_distance;
-}
-
-bool CollisionGuardNode::sensorIsInvalidForMotion(const SensorView & sensor) const
-{
-  return sensor.validity != SensorValidity::kValid;
-}
-
-void CollisionGuardNode::applyReverseGuard(
-  geometry_msgs::msg::Twist & output,
-  const std::array<SensorView, kSensorCount> & views,
-  double angular_z,
-  GuardStatus & status) const
-{
-  const auto rear_left = views[static_cast<std::size_t>(SensorIndex::kRearLeft)];
-  const auto rear_right = views[static_cast<std::size_t>(SensorIndex::kRearRight)];
-  const auto rear_center = views[static_cast<std::size_t>(SensorIndex::kRearCenter)];
-  const auto front_left = views[static_cast<std::size_t>(SensorIndex::kFrontLeft)];
-  const auto front_right = views[static_cast<std::size_t>(SensorIndex::kFrontRight)];
-
-  const bool rear_left_invalid = sensorIsInvalidForMotion(rear_left);
-  const bool rear_right_invalid = sensorIsInvalidForMotion(rear_right);
-  const bool rear_center_invalid = sensorIsInvalidForMotion(rear_center);
-
-  if (sensorIsStop(rear_center, reverse_stop_distance_)) {
-    output.linear.x = 0.0;
-    updateStatus(
-      status, "reverse", "stop", true, "rear_center", rear_center.distance,
-      "rear_center_stop_threshold");
-    return;
-  }
-  if (rear_center_invalid && (rear_left_invalid || rear_right_invalid)) {
-    output.linear.x = 0.0;
-    updateStatus(
-      status, "reverse", "stop", true,
-      rear_left_invalid && rear_right_invalid ? "rear_center,rear_left,rear_right" :
-      joinSensors("rear_center", rear_left_invalid ? "rear_left" : "rear_right"),
-      kUnknownDistance, "rear_center_side_invalid_stop");
-    return;
-  }
-  if (rear_left_invalid && rear_right_invalid) {
-    output.linear.x = 0.0;
-    updateStatus(
-      status, "reverse", "stop", true, "rear_left,rear_right", kUnknownDistance,
-      "rear_pair_invalid_stop");
-    return;
-  }
-
-  if (angular_z > rotate_deadband_ && sensorIsStop(rear_left, reverse_stop_distance_)) {
-    output.linear.x = 0.0;
-    updateStatus(
-      status, "reverse_turn_left", "stop", true, "rear_left", rear_left.distance,
-      "reverse_turn_left_stop_threshold");
-    return;
-  }
-  if (angular_z < -rotate_deadband_ && sensorIsStop(rear_right, reverse_stop_distance_)) {
-    output.linear.x = 0.0;
-    updateStatus(
-      status, "reverse_turn_right", "stop", true, "rear_right", rear_right.distance,
-      "reverse_turn_right_stop_threshold");
-    return;
-  }
-  if (sensorIsStop(rear_left, reverse_stop_distance_)) {
-    output.linear.x = 0.0;
-    updateStatus(
-      status, "reverse", "stop", true, "rear_left", rear_left.distance,
-      "rear_left_stop_threshold");
-    return;
-  }
-  if (sensorIsStop(rear_right, reverse_stop_distance_)) {
-    output.linear.x = 0.0;
-    updateStatus(
-      status, "reverse", "stop", true, "rear_right", rear_right.distance,
-      "rear_right_stop_threshold");
-    return;
-  }
-  if (sensorIsStop(front_left, side_stop_distance_)) {
-    output.linear.x = 0.0;
-    updateStatus(
-      status, "reverse", "stop", true, "front_left", front_left.distance,
-      "front_left_side_stop_threshold");
-    return;
-  }
-  if (sensorIsStop(front_right, side_stop_distance_)) {
-    output.linear.x = 0.0;
-    updateStatus(
-      status, "reverse", "stop", true, "front_right", front_right.distance,
-      "front_right_side_stop_threshold");
-    return;
-  }
-
-  if (rear_center_invalid) {
-    output.linear.x = std::max(output.linear.x, -reverse_limited_speed_abs_);
-    updateStatus(
-      status, "reverse", "slow", false, "rear_center", kUnknownDistance,
-      "rear_center_invalid_slow");
-    return;
-  }
-
-  if (rear_left_invalid || rear_right_invalid) {
-    output.linear.x = std::max(output.linear.x, -reverse_limited_speed_abs_);
-    updateStatus(
-      status, "reverse", "slow", false,
-      rear_left_invalid ? "rear_left" : "rear_right", kUnknownDistance,
-      "rear_single_invalid_slow");
-    return;
-  }
-
-  if (sensorIsSlow(rear_center, reverse_slow_distance_)) {
-    output.linear.x = std::max(output.linear.x, -reverse_limited_speed_abs_);
-    updateStatus(
-      status, "reverse", "slow", false, "rear_center", rear_center.distance,
-      "rear_center_slow_threshold");
-  }
-  if (angular_z > rotate_deadband_ && sensorIsSlow(rear_left, reverse_slow_distance_)) {
-    output.linear.x = std::max(output.linear.x, -reverse_limited_speed_abs_);
-    updateStatus(
-      status, "reverse_turn_left", "slow", false, "rear_left", rear_left.distance,
-      "reverse_turn_left_slow_threshold");
-  }
-  if (angular_z < -rotate_deadband_ && sensorIsSlow(rear_right, reverse_slow_distance_)) {
-    output.linear.x = std::max(output.linear.x, -reverse_limited_speed_abs_);
-    updateStatus(
-      status, "reverse_turn_right", "slow", false, "rear_right", rear_right.distance,
-      "reverse_turn_right_slow_threshold");
-  }
-  if (sensorIsSlow(rear_left, reverse_slow_distance_)) {
-    output.linear.x = std::max(output.linear.x, -reverse_limited_speed_abs_);
-    updateStatus(
-      status, "reverse", "slow", false, "rear_left", rear_left.distance,
-      "rear_left_slow_threshold");
-  }
-  if (sensorIsSlow(rear_right, reverse_slow_distance_)) {
-    output.linear.x = std::max(output.linear.x, -reverse_limited_speed_abs_);
-    updateStatus(
-      status, "reverse", "slow", false, "rear_right", rear_right.distance,
-      "rear_right_slow_threshold");
-  }
-  if (sensorIsSlow(front_left, side_slow_distance_)) {
-    output.linear.x = std::max(output.linear.x, -reverse_limited_speed_abs_);
-    updateStatus(
-      status, "reverse", "slow", false, "front_left", front_left.distance,
-      "front_left_side_slow_threshold");
-  }
-  if (sensorIsSlow(front_right, side_slow_distance_)) {
-    output.linear.x = std::max(output.linear.x, -reverse_limited_speed_abs_);
-    updateStatus(
-      status, "reverse", "slow", false, "front_right", front_right.distance,
-      "front_right_side_slow_threshold");
-  }
-}
-
-void CollisionGuardNode::applyRotateGuard(
-  geometry_msgs::msg::Twist & output,
-  const std::array<SensorView, kSensorCount> & views,
-  GuardStatus & status) const
-{
-  const bool rotate_left = output.angular.z > 0.0;
-  const auto primary_index = rotate_left ? SensorIndex::kFrontLeft : SensorIndex::kFrontRight;
-  const auto secondary_index = rotate_left ? SensorIndex::kRearLeft : SensorIndex::kRearRight;
-  const auto primary = views[static_cast<std::size_t>(primary_index)];
-  const auto secondary = views[static_cast<std::size_t>(secondary_index)];
-  const auto rear_left = views[static_cast<std::size_t>(SensorIndex::kRearLeft)];
-  const auto rear_right = views[static_cast<std::size_t>(SensorIndex::kRearRight)];
-  const auto rear_center = views[static_cast<std::size_t>(SensorIndex::kRearCenter)];
-  const std::string mode = rotate_left ? "rotate_left" : "rotate_right";
-  const std::string primary_name = sensorName(primary_index);
-  const std::string secondary_name = sensorName(secondary_index);
-
-  const bool primary_invalid = sensorIsInvalidForMotion(primary);
-  const bool secondary_invalid = sensorIsInvalidForMotion(secondary);
-
-  if (primary_invalid && secondary_invalid) {
-    output.angular.z = 0.0;
-    updateStatus(
-      status, mode, "stop", true, joinSensors(primary_name, secondary_name), kUnknownDistance, "invalid");
-    return;
-  }
-
-  if (sensorIsStop(rear_center, rotate_stop_distance_)) {
-    output.angular.z = 0.0;
-    updateStatus(
-      status, mode, "stop", true, "rear_center", rear_center.distance,
-      "rotation_rear_stop_threshold");
-    return;
-  }
-  if (sensorIsStop(rear_left, rotate_stop_distance_)) {
-    output.angular.z = 0.0;
-    updateStatus(
-      status, mode, "stop", true, "rear_left", rear_left.distance,
-      "rotation_rear_stop_threshold");
-    return;
-  }
-  if (sensorIsStop(rear_right, rotate_stop_distance_)) {
-    output.angular.z = 0.0;
-    updateStatus(
-      status, mode, "stop", true, "rear_right", rear_right.distance,
-      "rotation_rear_stop_threshold");
-    return;
-  }
-  if (sensorIsStop(primary, side_stop_distance_) || sensorIsStop(primary, rotate_stop_distance_)) {
-    output.angular.z = 0.0;
-    updateStatus(status, mode, "stop", true, primary_name, primary.distance, "side_pinch");
-    return;
-  }
-  if (sensorIsStop(secondary, rotate_stop_distance_)) {
-    output.angular.z = 0.0;
-    updateStatus(status, mode, "stop", true, secondary_name, secondary.distance, "stop_distance");
-    return;
-  }
-
-  if (primary_invalid || secondary_invalid) {
-    output.angular.z = std::copysign(
-      std::min(std::abs(output.angular.z), rotate_limited_speed_abs_), output.angular.z);
-    updateStatus(
-      status, mode, "slow", false, primary_invalid ? primary_name : secondary_name,
-      kUnknownDistance, "invalid");
-    return;
-  }
-
-  if (sensorIsSlow(rear_center, rotate_slow_distance_)) {
-    output.angular.z = std::copysign(
-      std::min(std::abs(output.angular.z), rotate_limited_speed_abs_), output.angular.z);
-    updateStatus(
-      status, mode, "slow", false, "rear_center", rear_center.distance,
-      "rotation_rear_slow_threshold");
-  }
-  if (sensorIsSlow(rear_left, rotate_slow_distance_)) {
-    output.angular.z = std::copysign(
-      std::min(std::abs(output.angular.z), rotate_limited_speed_abs_), output.angular.z);
-    updateStatus(
-      status, mode, "slow", false, "rear_left", rear_left.distance,
-      "rotation_rear_slow_threshold");
-  }
-  if (sensorIsSlow(rear_right, rotate_slow_distance_)) {
-    output.angular.z = std::copysign(
-      std::min(std::abs(output.angular.z), rotate_limited_speed_abs_), output.angular.z);
-    updateStatus(
-      status, mode, "slow", false, "rear_right", rear_right.distance,
-      "rotation_rear_slow_threshold");
-  }
-  if (sensorIsSlow(primary, side_slow_distance_) || sensorIsSlow(primary, rotate_slow_distance_)) {
-    output.angular.z = std::copysign(
-      std::min(std::abs(output.angular.z), rotate_limited_speed_abs_), output.angular.z);
-    updateStatus(status, mode, "slow", false, primary_name, primary.distance, "side_slow");
-  }
-  if (sensorIsSlow(secondary, rotate_slow_distance_)) {
-    output.angular.z = std::copysign(
-      std::min(std::abs(output.angular.z), rotate_limited_speed_abs_), output.angular.z);
-    updateStatus(status, mode, "slow", false, secondary_name, secondary.distance, "slow_distance");
-  }
+  GuardConfig config;
+  config.min_range = min_range_;
+  config.max_valid_range = max_valid_range_;
+  config.sentinel_invalid_range = sentinel_invalid_range_;
+  config.sensor_timeout_sec = sensor_timeout_sec_;
+  config.linear_deadband = linear_deadband_;
+  config.reverse_deadband = reverse_deadband_;
+  config.rotate_deadband = rotate_deadband_;
+  config.reverse_stop_distance = reverse_stop_distance_;
+  config.reverse_slow_distance = reverse_slow_distance_;
+  config.side_stop_distance = side_stop_distance_;
+  config.side_slow_distance = side_slow_distance_;
+  config.rotate_stop_distance = rotate_stop_distance_;
+  config.rotate_slow_distance = rotate_slow_distance_;
+  config.reverse_limited_speed_abs = reverse_limited_speed_abs_;
+  config.rotate_limited_speed_abs = rotate_limited_speed_abs_;
+  return config;
 }
 
 void CollisionGuardNode::publishStatus(const GuardStatus & status, const rclcpp::Time & now)
@@ -461,6 +192,7 @@ void CollisionGuardNode::publishStatus(const GuardStatus & status, const rclcpp:
   add_value("active_sensor", status.active_sensor);
   add_value("distance", distanceString(status.distance));
   add_value("reason", status.reason);
+  add_value("sensor_states", status.sensor_states);
 
   array.status.push_back(diagnostic);
   status_pub_->publish(array);
@@ -468,49 +200,11 @@ void CollisionGuardNode::publishStatus(const GuardStatus & status, const rclcpp:
   last_status_publish_ = now;
 }
 
-void CollisionGuardNode::updateStatus(
-  GuardStatus & status,
-  const std::string & mode,
-  const std::string & action,
-  bool blocked,
-  const std::string & active_sensor,
-  double distance,
-  const std::string & reason) const
-{
-  if (status.blocked && !blocked) {
-    return;
-  }
-  if (status.action == "slow" && action == "pass") {
-    return;
-  }
-  if (status.action == "slow" && action == "slow" &&
-    std::isfinite(status.distance) && std::isfinite(distance) && status.distance <= distance)
-  {
-    return;
-  }
-
-  status.mode = status.mode == "idle" || status.mode == mode ? mode : status.mode + "+" + mode;
-  status.action = action;
-  status.blocked = blocked;
-  status.active_sensor = active_sensor;
-  status.distance = distance;
-  status.reason = reason;
-}
-
 std::string CollisionGuardNode::statusSignature(const GuardStatus & status) const
 {
   return status.mode + "|" + status.action + "|" + boolString(status.blocked) + "|" +
-         status.active_sensor + "|" + status.reason + "|" + distanceString(status.distance);
-}
-
-std::string CollisionGuardNode::sensorName(SensorIndex index) const
-{
-  return sensors_[static_cast<std::size_t>(index)].name;
-}
-
-std::string CollisionGuardNode::joinSensors(const std::string & first, const std::string & second) const
-{
-  return first + "," + second;
+         status.active_sensor + "|" + status.reason + "|" + distanceString(status.distance) + "|" +
+         status.sensor_states;
 }
 
 }  // namespace sensor_components

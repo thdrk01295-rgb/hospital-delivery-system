@@ -25,12 +25,10 @@ def generate_launch_description():
     imu_params_file = LaunchConfiguration('imu_params_file')
     ekf_params_file = LaunchConfiguration('ekf_params_file')
     tof_params_file = LaunchConfiguration('tof_params_file')
-    tof_obstacle_params_file = LaunchConfiguration('tof_obstacle_params_file')
     collision_guard_params_file = LaunchConfiguration('collision_guard_params_file')
     laser_filter_params_file = LaunchConfiguration('laser_filter_params_file')
     laser_filter_input_topic = LaunchConfiguration('laser_filter_input_topic')
     laser_filter_output_topic = LaunchConfiguration('laser_filter_output_topic')
-
     default_params_file = os.path.join(
         navigation_dir,
         'config',
@@ -60,11 +58,6 @@ def generate_launch_description():
         sensor_dir,
         'config',
         'tof_params.yaml'
-    )
-    default_tof_obstacle_params_file = os.path.join(
-        sensor_dir,
-        'config',
-        'tof_obstacle_params.yaml'
     )
     default_collision_guard_params_file = os.path.join(
         sensor_dir,
@@ -154,10 +147,6 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'tof_params_file',
             default_value=default_tof_params_file
-        ),
-        DeclareLaunchArgument(
-            'tof_obstacle_params_file',
-            default_value=default_tof_obstacle_params_file
         ),
         DeclareLaunchArgument(
             'collision_guard_params_file',
@@ -296,16 +285,6 @@ def generate_launch_description():
             output='screen',
             parameters=[
                 tof_params_file,
-                {'use_sim_time': use_sim_time}
-            ]
-        ),
-        Node(
-            package='sensor_components',
-            executable='tof_obstacle_node',
-            name='tof_obstacle_node',
-            output='screen',
-            parameters=[
-                tof_obstacle_params_file,
                 {'use_sim_time': use_sim_time}
             ]
         ),

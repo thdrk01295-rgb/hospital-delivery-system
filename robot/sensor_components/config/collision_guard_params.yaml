@@ -3,24 +3,32 @@ collision_guard_node:
     input_cmd_topic: "/cmd_vel_smoothed"
     output_cmd_topic: "/cmd_vel"
     status_topic: "/tof/collision_guard_status"
+
     front_left_topic: "/tof/front_left"
     front_right_topic: "/tof/front_right"
     rear_left_topic: "/tof/rear_left"
     rear_right_topic: "/tof/rear_right"
     rear_center_topic: "/tof/rear_center"
+
     min_range: 0.03
     max_valid_range: 1.2
     sentinel_invalid_range: 8.0
-    sensor_timeout_sec: 0.35
+
+    sensor_timeout_sec: 0.50
     status_publish_period_sec: 0.5
+
     linear_deadband: 0.01
     reverse_deadband: 0.01
-    rotate_deadband: 0.03
-    reverse_stop_distance: 0.25
-    reverse_slow_distance: 0.45
-    side_stop_distance: 0.18
-    side_slow_distance: 0.35
-    rotate_stop_distance: 0.22
-    rotate_slow_distance: 0.40
+    rotate_deadband: 0.05
+
+    reverse_stop_distance: 0.22
+    reverse_slow_distance: 0.38
+
+    side_stop_distance: 0.14
+    side_slow_distance: 0.25
+
+    rotate_stop_distance: 0.16
+    rotate_slow_distance: 0.28
+
     reverse_limited_speed_abs: 0.03
-    rotate_limited_speed_abs: 0.15
+    rotate_limited_speed_abs: 0.10

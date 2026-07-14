@@ -49,7 +49,7 @@ bt_navigator:
     robot_base_frame: "base_footprint"
     odom_topic: "/odometry/filtered"
     bt_loop_duration: 10
-    default_server_timeout: 20
+    default_server_timeout: 30
     wait_for_service_timeout: 1000  # 1000ms
     navigators: ["navigate_to_pose", "navigate_through_poses"]
     navigate_to_pose:
@@ -71,7 +71,7 @@ controller_server:
     progress_checker:
       plugin: "nav2_controller::SimpleProgressChecker"
       required_movement_radius: 0.3 # 이 거리 이상 이동 못하면 stuck 판단
-      movement_time_allowance: 10.0 # 몇 초 동안 움직임 없으면 recovery
+      movement_time_allowance: 15.0 # 몇 초 동안 움직임 없으면 recovery
     goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
       xy_goal_tolerance: 0.10 # 목표 위치 허용 오차
@@ -79,12 +79,12 @@ controller_server:
       stateful: true
     FollowPath:
       plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
-      desired_linear_vel: 0.22 # 목표 직진 속도
+      desired_linear_vel: 0.12 # 목표 직진 속도
       lookahead_dist: 0.45    # 추종 경로 지정
       min_lookahead_dist: 0.25  # 추종점 최소 거리
       max_lookahead_dist: 0.7
       lookahead_time: 1.5
-      rotate_to_heading_angular_vel: 0.35  # 제자리 회전 속도
+      rotate_to_heading_angular_vel: 0.20  # 제자리 회전 속도
       transform_tolerance: 0.1
       use_velocity_scaled_lookahead_dist: false # 속도에 따라 lookahead를 자동 조절
       min_approach_linear_velocity: 0.05  # goal 접근 시 최소 선속도
@@ -98,7 +98,7 @@ controller_server:
       cost_scaling_dist: 0.3  # 장애물 가까워질 때 감속 시작 거리
       cost_scaling_gain: 1.0  # cost 기반 감속 강도
       inflation_cost_scaling_factor: 3.0  # 장애물 근처 cost 증가 정도
-      use_rotate_to_heading: true # 경로 시작 방향이나 goal 방향에 맞추기 위해 제자리 회전 사용
+      use_rotate_to_heading: false # 경로 시작 방향이나 goal 방향에 맞추기 위해 제자리 회전 사용
       rotate_to_heading_min_angle: 0.785  # 
       max_angular_accel: 1.0  # 최대 각가속도
       max_robot_pose_search_dist: 10.0  # 경로 위에서 로봇과 가장 가까운 pose를 찾는 최대 거리
@@ -106,8 +106,8 @@ local_costmap:
   local_costmap:
     ros__parameters:
       use_sim_time: false
-      update_frequency: 5.0
-      publish_frequency: 2.0
+      update_frequency: 10.0
+      publish_frequency: 5.0
       global_frame: "odom"
       robot_base_frame: "base_footprint"
       rolling_window: true  
@@ -119,25 +119,17 @@ local_costmap:
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: true 
-        observation_sources: "scan tof_obstacles"
+        observation_sources: "scan"
         scan:
           topic: "/scan"
           max_obstacle_height: 2.0
           clearing: true
           marking: true
           data_type: "LaserScan"
-          raytrace_max_range: 4.0   # clear 영역 최대 거리
+          raytrace_max_range: 2.0   # clear 영역 최대 거리
           raytrace_min_range: 0.0
-          obstacle_max_range: 3.0   # 장애물 등록 최대 거리
-          obstacle_min_range: 0.0
-        tof_obstacles:
-          topic: "/tof/obstacles"
-          max_obstacle_height: 2.0
-          clearing: false
-          marking: true
-          data_type: "PointCloud2"
-          obstacle_max_range: 2.0
-          obstacle_min_range: 0.0
+          obstacle_max_range: 2.3   # 장애물 등록 최대 거리
+          obstacle_min_range: 0.1
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
@@ -172,7 +164,7 @@ global_costmap:
           raytrace_max_range: 4.0
           raytrace_min_range: 0.0
           obstacle_max_range: 3.0
-          obstacle_min_range: 0.0
+          obstacle_min_range: 0.1
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
@@ -240,8 +232,8 @@ behavior_server:
     robot_base_frame: "base_footprint"
     transform_tolerance: 0.1
     simulate_ahead_time: 2.0  # behavior 실행 전 전방 시뮬레이션 시간
-    max_rotational_vel: 0.35  # spin 동작 최대 회전 속도
-    min_rotational_vel: 0.2   # spin 동작 최소 회전 속도
+    max_rotational_vel: 0.20  # spin 동작 최대 회전 속도
+    min_rotational_vel: 0.1   # spin 동작 최소 회전 속도
     rotational_acc_lim: 1.0
 
 waypoint_follower:
@@ -261,8 +253,8 @@ velocity_smoother:
     smoothing_frequency: 20.0
     scale_velocities: false
     feedback: "OPEN_LOOP" # smoothing 기준 - OPEN_LOOP: 단순/안정. CLOSED_LOOP: 실제 속도 반영
-    max_velocity: [0.22, 0.0, 0.35] # 최대 속도 x y theta
-    min_velocity: [-0.1, 0.0, -0.35]
+    max_velocity: [0.12, 0.0, 0.20] # 최대 속도 x y theta
+    min_velocity: [-0.1, 0.0, -0.20]
     max_accel: [0.3, 0.0, 0.8]  # 최대 가속도
     max_decel: [-0.3, 0.0, -0.8]
     odom_topic: "/odometry/filtered"

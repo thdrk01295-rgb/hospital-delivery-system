@@ -1,0 +1,8 @@
+battery_node:
+  ros__parameters:
+    robot_id: "AMR-001"
+    i2c_device: "/dev/i2c-1"
+    i2c_address: 0x36
+    publish_rate_hz: 1.0
+    warn_soc_percent: 20.0
+    critical_soc_percent: 10.0

@@ -2,13 +2,13 @@
 #define SENSOR_COMPONENTS_COLLISION_GUARD_NODE_HPP_
 
 #include <array>
-#include <cstddef>
 #include <string>
 
 #include "diagnostic_msgs/msg/diagnostic_array.hpp"
 #include "geometry_msgs/msg/twist.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/range.hpp"
+#include "sensor_components/collision_guard_policy.hpp"
 
 namespace sensor_components
 {
@@ -19,25 +19,6 @@ public:
   CollisionGuardNode();
 
 private:
-  enum class SensorIndex : std::size_t
-  {
-    kFrontLeft = 0,
-    kFrontRight = 1,
-    kRearLeft = 2,
-    kRearRight = 3,
-    kRearCenter = 4,
-  };
-
-  static constexpr std::size_t kSensorCount = 5;
-
-  enum class SensorValidity
-  {
-    kValid,
-    kMissing,
-    kTimeout,
-    kInvalid,
-  };
-
   struct SensorState
   {
     std::string name;
@@ -48,50 +29,12 @@ private:
     rclcpp::Subscription<sensor_msgs::msg::Range>::SharedPtr subscription;
   };
 
-  struct SensorView
-  {
-    SensorValidity validity;
-    double distance;
-    std::string reason;
-  };
-
-  struct GuardStatus
-  {
-    std::string mode;
-    std::string action;
-    bool blocked;
-    std::string active_sensor;
-    double distance;
-    std::string reason;
-  };
-
   void cmdVelCallback(const geometry_msgs::msg::Twist::SharedPtr msg);
   void rangeCallback(const sensor_msgs::msg::Range::SharedPtr msg, SensorIndex index);
-  SensorView sensorView(SensorIndex index, const rclcpp::Time & now) const;
-  bool sensorIsStop(const SensorView & sensor, double stop_distance) const;
-  bool sensorIsSlow(const SensorView & sensor, double slow_distance) const;
-  bool sensorIsInvalidForMotion(const SensorView & sensor) const;
-  void applyReverseGuard(
-    geometry_msgs::msg::Twist & output,
-    const std::array<SensorView, kSensorCount> & views,
-    double angular_z,
-    GuardStatus & status) const;
-  void applyRotateGuard(
-    geometry_msgs::msg::Twist & output,
-    const std::array<SensorView, kSensorCount> & views,
-    GuardStatus & status) const;
+  SensorSnapshot sensorSnapshot(SensorIndex index, const rclcpp::Time & now) const;
+  GuardConfig guardConfig() const;
   void publishStatus(const GuardStatus & status, const rclcpp::Time & now);
-  void updateStatus(
-    GuardStatus & status,
-    const std::string & mode,
-    const std::string & action,
-    bool blocked,
-    const std::string & active_sensor,
-    double distance,
-    const std::string & reason) const;
   std::string statusSignature(const GuardStatus & status) const;
-  std::string sensorName(SensorIndex index) const;
-  std::string joinSensors(const std::string & first, const std::string & second) const;
 
   std::array<SensorState, kSensorCount> sensors_;
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_sub_;

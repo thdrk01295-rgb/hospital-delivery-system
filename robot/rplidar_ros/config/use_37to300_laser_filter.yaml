@@ -4,6 +4,6 @@ scan_to_scan_filter_chain:
       name: use_37to300
       type: laser_filters/LaserScanAngularBoundsFilterInPlace
       params:
-        lower_angle: -0.6458
+        lower_angle: -1.0472
         upper_angle: 0.6458
         replace_with_nan: true
