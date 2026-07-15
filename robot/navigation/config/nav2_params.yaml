@@ -20,9 +20,9 @@ amcl:
     laser_max_range: 9.0
     laser_min_range: -1.0
     laser_model_type: "likelihood_field"
-    max_beams: 80 # 라이다 데이터
-    max_particles: 2000 # 초기 검증용 위치추정 particle 수
-    min_particles: 500
+    max_beams: 90 # 라이다 데이터
+    max_particles: 3000 # 초기 검증용 위치추정 particle 수
+    min_particles: 800
     odom_frame_id: "odom"
     pf_err: 0.05
     pf_z: 0.99
@@ -35,8 +35,8 @@ amcl:
     sigma_hit: 0.2
     tf_broadcast: true
     transform_tolerance: 1.0
-    update_min_a: 0.15
-    update_min_d: 0.15
+    update_min_a: 0.10
+    update_min_d: 0.10
     z_hit: 0.5
     z_max: 0.05
     z_rand: 0.5

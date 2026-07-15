@@ -2,8 +2,9 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, TimerAction
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
 from launch.conditions import IfCondition
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import Command, LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
@@ -24,7 +25,6 @@ def generate_launch_description():
     encoder_params_file = LaunchConfiguration('encoder_params_file')
     imu_params_file = LaunchConfiguration('imu_params_file')
     ekf_params_file = LaunchConfiguration('ekf_params_file')
-    tof_params_file = LaunchConfiguration('tof_params_file')
     collision_guard_params_file = LaunchConfiguration('collision_guard_params_file')
     laser_filter_params_file = LaunchConfiguration('laser_filter_params_file')
     laser_filter_input_topic = LaunchConfiguration('laser_filter_input_topic')
@@ -53,11 +53,6 @@ def generate_launch_description():
         sensor_dir,
         'config',
         'ekf.yaml'
-    )
-    default_tof_params_file = os.path.join(
-        sensor_dir,
-        'config',
-        'tof_params.yaml'
     )
     default_collision_guard_params_file = os.path.join(
         sensor_dir,
@@ -143,10 +138,6 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'ekf_params_file',
             default_value=default_ekf_params_file
-        ),
-        DeclareLaunchArgument(
-            'tof_params_file',
-            default_value=default_tof_params_file
         ),
         DeclareLaunchArgument(
             'collision_guard_params_file',
@@ -278,15 +269,10 @@ def generate_launch_description():
                 ('scan_filtered', laser_filter_output_topic)
             ]
         ),
-        Node(
-            package='sensor_components',
-            executable='tof_node',
-            name='tof_node',
-            output='screen',
-            parameters=[
-                tof_params_file,
-                {'use_sim_time': use_sim_time}
-            ]
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(
+                os.path.join(sensor_dir, 'launch', 'tof_python_launch.py')
+            )
         ),
         Node(
             package='nav2_map_server',
