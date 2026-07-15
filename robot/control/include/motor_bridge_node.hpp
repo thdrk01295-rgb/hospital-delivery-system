@@ -60,7 +60,8 @@ private:
   std::string port_;
   int baudrate_;
   double wheel_separation_;
-  double max_linear_vel_;
+  double wheel_radius_;
+  double max_motor_rpm_;
   double watchdog_timeout_;
 
   int serial_fd_;
