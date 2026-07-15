@@ -124,14 +124,23 @@ MotorBridgeNode::MotorBridgeNode()
   declare_parameter<std::string>("port", "/dev/ttyUSB0");
   declare_parameter<int>("baudrate", 115200);
   declare_parameter<double>("wheel_separation", 0.35);
-  declare_parameter<double>("max_linear_vel", 1.0);
+  declare_parameter<double>("wheel_radius", 0.0625);
+  declare_parameter<double>("max_motor_rpm", 204.0);
   declare_parameter<double>("watchdog_timeout", 0.5);
 
   port_             = get_parameter("port").as_string();
   baudrate_         = get_parameter("baudrate").as_int();
   wheel_separation_ = get_parameter("wheel_separation").as_double();
-  max_linear_vel_   = get_parameter("max_linear_vel").as_double();
+  wheel_radius_     = get_parameter("wheel_radius").as_double();
+  max_motor_rpm_    = get_parameter("max_motor_rpm").as_double();
   watchdog_timeout_ = get_parameter("watchdog_timeout").as_double();
+
+  if (wheel_radius_ <= 0.0) {
+    RCLCPP_ERROR(get_logger(), "wheel_radius must be greater than 0.0");
+  }
+  if (max_motor_rpm_ <= 0.0) {
+    RCLCPP_ERROR(get_logger(), "max_motor_rpm must be greater than 0.0");
+  }
 
   cmd_sub_ = create_subscription<geometry_msgs::msg::Twist>(
     "/cmd_vel", 10,
@@ -279,19 +288,30 @@ void MotorBridgeNode::cmdVelCallback(const geometry_msgs::msg::Twist::SharedPtr 
   const double v_left  = v - (wheel_separation_ * 0.5) * w;
   const double v_right = v + (wheel_separation_ * 0.5) * w;
 
-  const double max_linear_vel = std::abs(max_linear_vel_);
-  if (max_linear_vel <= 0.0) {
+  if (wheel_radius_ <= 0.0 || max_motor_rpm_ <= 0.0) {
     RCLCPP_WARN_THROTTLE(
       get_logger(), *get_clock(), 1000,
-      "max_linear_vel must be greater than 0. Sending stop command.");
+      "wheel_radius and max_motor_rpm must be greater than 0. Sending stop command.");
     sendMotorCommand(0, 0);
     last_cmd_time_ = now();
     return;
   }
 
-  const int pct_left = static_cast<int>(std::round(v_left / max_linear_vel * 100.0));
-  const int pct_right = static_cast<int>(std::round(v_right / max_linear_vel * 100.0));
-  sendMotorCommand(pct_left, pct_right);
+  const double wheel_circumference = 2.0 * PI_CONST * wheel_radius_;
+  const double rpm_left = v_left / wheel_circumference * 60.0;
+  const double rpm_right = v_right / wheel_circumference * 60.0;
+
+  const int pct_left = static_cast<int>(std::round(rpm_left / max_motor_rpm_ * 100.0));
+  const int pct_right = static_cast<int>(std::round(rpm_right / max_motor_rpm_ * 100.0));
+  const int cmd_left = static_cast<int>(clamp(pct_left, -100.0, 100.0));
+  const int cmd_right = static_cast<int>(clamp(pct_right, -100.0, 100.0));
+
+  RCLCPP_DEBUG_THROTTLE(
+    get_logger(), *get_clock(), 1000,
+    "cmd_vel v=%.3f w=%.3f wheel_v=(%.3f, %.3f) rpm=(%.3f, %.3f) cmd=(%d, %d)",
+    v, w, v_left, v_right, rpm_left, rpm_right, cmd_left, cmd_right);
+
+  sendMotorCommand(cmd_left, cmd_right);
 
   last_cmd_time_ = now();
 }

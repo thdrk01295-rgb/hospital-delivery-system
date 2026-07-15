@@ -210,7 +210,8 @@ def generate_launch_description():
                 'port': LaunchConfiguration('motor_port'),
                 'baudrate': ParameterValue(LaunchConfiguration('motor_baudrate'), value_type=int),
                 'wheel_separation': 0.35,
-                'max_linear_vel': 0.25,
+                'wheel_radius': 0.0625,
+                'max_motor_rpm': 204.0,
                 'watchdog_timeout': 0.5
             }]
         ),

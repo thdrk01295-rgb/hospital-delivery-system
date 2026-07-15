@@ -12,7 +12,8 @@ def generate_launch_description():
         DeclareLaunchArgument('port', default_value='/dev/ttyACM0'),
         DeclareLaunchArgument('baudrate', default_value='115200'),
         DeclareLaunchArgument('wheel_separation', default_value='0.35'),
-        DeclareLaunchArgument('max_linear_vel', default_value='1.0'),
+        DeclareLaunchArgument('wheel_radius', default_value='0.0625'),
+        DeclareLaunchArgument('max_motor_rpm', default_value='204.0'),
         DeclareLaunchArgument('watchdog_timeout', default_value='0.5'),
         DeclareLaunchArgument('enable_control_motor_bridge', default_value='false'),
 
@@ -25,7 +26,8 @@ def generate_launch_description():
                 'port': LaunchConfiguration('port'),
                 'baudrate': LaunchConfiguration('baudrate'),
                 'wheel_separation': LaunchConfiguration('wheel_separation'),
-                'max_linear_vel': LaunchConfiguration('max_linear_vel'),
+                'wheel_radius': LaunchConfiguration('wheel_radius'),
+                'max_motor_rpm': LaunchConfiguration('max_motor_rpm'),
                 'watchdog_timeout': LaunchConfiguration('watchdog_timeout'),
             }]
         ),
