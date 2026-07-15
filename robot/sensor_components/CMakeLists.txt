@@ -80,6 +80,11 @@ install(TARGETS imu_node tof_node tof_obstacle_node collision_guard_node battery
   DESTINATION lib/${PROJECT_NAME}
 )
 
+install(PROGRAMS
+  scripts/tof_node.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 install(DIRECTORY launch config
   DESTINATION share/${PROJECT_NAME}
 )

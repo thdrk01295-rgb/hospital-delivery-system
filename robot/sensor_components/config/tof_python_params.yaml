@@ -1,0 +1,16 @@
+tof_node:
+  ros__parameters:
+    publish_rate_hz: 10.0
+    read_rate_hz: 10.0
+
+    min_range: 0.03
+    max_range: 1.2
+    field_of_view: 0.436
+
+    init_all_low_delay_sec: 0.1
+    init_each_sensor_delay_sec: 0.05
+
+    vl53l1x_ready_retries: 20
+    vl53l1x_ready_wait_sec: 0.01
+
+    error_log_throttle_sec: 2.0
