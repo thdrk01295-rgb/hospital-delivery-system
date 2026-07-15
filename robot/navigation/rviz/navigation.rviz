@@ -87,6 +87,22 @@ Visualization Manager:
       Marker Scale: 0.5
       Frame Timeout: 15
       Update Interval: 0
+    
+    - Class: nav2_rviz_plugins/ParticleCloud
+      Name: ParticleCloud
+      Enabled: true
+      Topic:
+        Value: /particlecloud
+      Shape: Arrow
+      Arrow Length: 0.15 
+      Arrow Radius: 0.01
+      Color: 
+        Value: 255; 25; 0 
+      Alpha: 0.7 
+      Min Color: 
+        Value: 0; 0; 255 
+      Max Color: 
+        Value: 255; 0; 0
 
     - Class: rviz_default_plugins/RobotModel
       Name: RobotModel
@@ -173,7 +189,7 @@ Visualization Manager:
 
   Views:
     Current:
-      Class: rviz_default_plugins/Orbit
+      Class: rviz_default_plugins/TopDownOrtho
       Distance: 12
       Focal Point:
         X: 0

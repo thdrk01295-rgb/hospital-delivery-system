@@ -8,6 +8,7 @@
   <xacro:property name="drive_wheel_diameter" value="0.125"/>
   <xacro:property name="drive_wheel_radius" value="0.0625"/>
   <xacro:property name="drive_wheel_thickness" value="0.04"/>
+  <xacro:property name="body_mount_shift_x" value="-0.16"/>
 
   <xacro:property name="lidar_size" value="0.037 0.037 0.024"/>
   <xacro:property name="imu_size" value="0.045 0.035 0.018"/>
@@ -18,8 +19,8 @@
   <xacro:property name="lidar_y" value="0.0"/>
   <xacro:property name="lidar_z" value="0.175"/>
 
-  <xacro:property name="imu_x" value="-0.07"/>
-  <xacro:property name="imu_y" value="0.01"/>
+  <xacro:property name="imu_x" value="0.0"/>
+  <xacro:property name="imu_y" value="0.0"/>
   <xacro:property name="imu_z" value="0.015"/>
 
   <xacro:property name="tof_front_left_x" value="0.22"/>
@@ -28,7 +29,7 @@
   <xacro:property name="tof_front_left_yaw" value="0.209440"/>
 
   <xacro:property name="tof_front_right_x" value="0.22"/>
-  <xacro:property name="tof_front_right_y" value="-0.23"/>
+  <xacro:property name="tof_front_right_y" value="-0.37"/>
   <xacro:property name="tof_front_right_z" value="0.15"/>
   <xacro:property name="tof_front_right_yaw" value="-0.209440"/>
 
@@ -38,11 +39,11 @@
   <xacro:property name="tof_rear_left_yaw" value="2.932153"/>
 
   <xacro:property name="tof_rear_right_x" value="-0.55"/>
-  <xacro:property name="tof_rear_right_y" value="-0.23"/>
+  <xacro:property name="tof_rear_right_y" value="-0.32"/>
   <xacro:property name="tof_rear_right_z" value="0.15"/>
   <xacro:property name="tof_rear_right_yaw" value="-2.932153"/>
 
-  <xacro:property name="tof_rear_center_x" value="-0.55"/>
+  <xacro:property name="tof_rear_center_x" value="-0.60"/>
   <xacro:property name="tof_rear_center_y" value="0.0"/>
   <xacro:property name="tof_rear_center_z" value="0.15"/>
   <xacro:property name="tof_rear_center_yaw" value="3.141593"/>
@@ -77,20 +78,20 @@
   <link name="base_link">
     <!-- TODO: Replace body primitive with Fusion 360 STL or DAE mesh after export. -->
     <visual>
-      <origin xyz="0 0 0.43" rpy="0 0 0"/>
+      <origin xyz="${body_mount_shift_x} 0 0.43" rpy="0 0 0"/>
       <geometry>
         <box size="${body_length} ${body_width} ${body_height}"/>
       </geometry>
       <material name="body_gray"/>
     </visual>
     <collision>
-      <origin xyz="0 0 0.43" rpy="0 0 0"/>
+      <origin xyz="${body_mount_shift_x} 0 0.43" rpy="0 0 0"/>
       <geometry>
         <box size="${body_length} ${body_width} ${body_height}"/>
       </geometry>
     </collision>
     <inertial>
-      <origin xyz="0 0 0.43" rpy="0 0 0"/>
+      <origin xyz="${body_mount_shift_x} 0 0.43" rpy="0 0 0"/>
       <mass value="15.0"/>
       <inertia ixx="0.5" ixy="0.0" ixz="0.0" iyy="0.8" iyz="0.0" izz="1.0"/>
     </inertial>

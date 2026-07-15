@@ -114,7 +114,7 @@ local_costmap:
       width: 3
       height: 3 # 로컬 맵 크기
       resolution: 0.05  # 해상도
-      footprint: "[[0.415, 0.355], [0.415, -0.355], [-0.415, -0.355], [-0.415, 0.355]]" # 로봇 실제 크기
+      footprint: "[[0.255, 0.355], [0.255, -0.355], [-0.575, -0.355], [-0.575, 0.355]]" # 로봇 실제 크기
       plugins: ["obstacle_layer", "inflation_layer"]  # costmap에 사용할 layer 목록
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
@@ -144,7 +144,7 @@ global_costmap:
       publish_frequency: 1.0
       global_frame: "map"
       robot_base_frame: "base_footprint"
-      footprint: "[[0.415, 0.355], [0.415, -0.355], [-0.415, -0.355], [-0.415, 0.355]]"
+      footprint: "[[0.255, 0.355], [0.255, -0.355], [-0.575, -0.355], [-0.575, 0.355]]"
       resolution: 0.05
       track_unknown_space: true
       plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
