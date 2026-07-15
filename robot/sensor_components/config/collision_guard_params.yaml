@@ -21,14 +21,14 @@ collision_guard_node:
     reverse_deadband: 0.01
     rotate_deadband: 0.05
 
-    reverse_stop_distance: 0.22
+    reverse_stop_distance: 0.25
     reverse_slow_distance: 0.38
 
-    side_stop_distance: 0.14
-    side_slow_distance: 0.25
+    side_stop_distance: 0.20
+    side_slow_distance: 0.30
 
-    rotate_stop_distance: 0.16
-    rotate_slow_distance: 0.28
+    rotate_stop_distance: 0.20
+    rotate_slow_distance: 0.30
 
     reverse_limited_speed_abs: 0.03
     rotate_limited_speed_abs: 0.10
