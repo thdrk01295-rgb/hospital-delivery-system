@@ -49,6 +49,7 @@ private:
 
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_sub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr raw_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr command_raw_pub_;
   rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr wheel_state_pub_;
   rclcpp::Publisher<std_msgs::msg::Int64MultiArray>::SharedPtr encoder_ticks_pub_;
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr joint_state_pub_;

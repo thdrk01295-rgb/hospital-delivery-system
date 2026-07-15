@@ -138,6 +138,7 @@ MotorBridgeNode::MotorBridgeNode()
     std::bind(&MotorBridgeNode::cmdVelCallback, this, std::placeholders::_1));
 
   raw_pub_           = create_publisher<std_msgs::msg::String>("/motor_feedback_raw", 10);
+  command_raw_pub_   = create_publisher<std_msgs::msg::String>("/motor_command_raw", 10);
   wheel_state_pub_   = create_publisher<std_msgs::msg::Float32MultiArray>("/wheel_state", 10);
   encoder_ticks_pub_ = create_publisher<std_msgs::msg::Int64MultiArray>("/encoder_ticks", 10);
   joint_state_pub_   = create_publisher<sensor_msgs::msg::JointState>("/joint_states", 10);
@@ -257,8 +258,13 @@ void MotorBridgeNode::sendMotorCommand(int left_pct, int right_pct)
   right_pct = static_cast<int>(clamp(right_pct, -100.0, 100.0));
 
   char buf[24];
-  std::snprintf(buf, sizeof(buf), "CMD:%d,%d\n", left_pct, right_pct);
-  sendSerial(buf);
+  std::snprintf(buf, sizeof(buf), "CMD:%d,%d", left_pct, right_pct);
+
+  std_msgs::msg::String msg;
+  msg.data = buf;
+  command_raw_pub_->publish(msg);
+
+  sendSerial(msg.data + "\n");
 }
 
 // ---------------------------------------------------------------------------
