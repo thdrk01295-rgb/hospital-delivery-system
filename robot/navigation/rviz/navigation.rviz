@@ -21,7 +21,7 @@ Panels:
     Name: Tool Properties
     Expanded:
       - /2D Pose Estimate1
-      - /2D Goal Pose1
+      - /Nav2 Goal1
       - /Publish Point1
     Splitter Ratio: 0.588679
 
@@ -36,6 +36,7 @@ Panels:
 
 Visualization Manager:
   Class: ""
+
   Global Options:
     Background Color: 48; 48; 48
     Fixed Frame: map
@@ -87,13 +88,13 @@ Visualization Manager:
       Marker Scale: 0.5
       Frame Timeout: 15
       Update Interval: 0
-    
+
     - Class: nav2_rviz_plugins/ParticleCloud
-      Color: 0; 180; 0
+      Name: Amcl Particle Swarm
       Enabled: true
+      Color: 0; 180; 0
       Max Arrow Length: 0.30000001192092896
       Min Arrow Length: 0.019999999552965164
-      Name: Amcl Particle Swarm
       Shape: Arrow (Flat)
       Topic:
         Depth: 5
@@ -156,6 +157,18 @@ Visualization Manager:
       Line Width: 0.04
       Color: 255; 140; 0
       Alpha: 1
+      
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Waypoints
+      Enabled: true
+      Topic:
+        Depth: 5
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /waypoints
+      Namespaces: {}
+      Value: true
 
     - Class: rviz_default_plugins/Axes
       Name: Base Footprint Axes
@@ -166,6 +179,7 @@ Visualization Manager:
 
   Tools:
     - Class: rviz_default_plugins/Interact
+      Hide Inactive Objects: true
 
     - Class: rviz_default_plugins/MoveCamera
 
@@ -179,9 +193,7 @@ Visualization Manager:
       Topic:
         Value: /initialpose
 
-    - Class: rviz_default_plugins/SetGoal
-      Topic:
-        Value: /goal_pose
+    - Class: nav2_rviz_plugins/GoalTool
 
     - Class: rviz_default_plugins/PublishPoint
       Topic:

@@ -1,9 +1,21 @@
 scan_to_scan_filter_chain:
   ros__parameters:
     filter1:
-      name: use_37to300
+      name: remove_blind_sector
       type: laser_filters/LaserScanAngularBoundsFilterInPlace
       params:
         lower_angle: -1.0472
         upper_angle: 0.6458
         replace_with_nan: true
+
+    filter2:
+      name: remove_lidar_mount
+      type: laser_filters/LaserScanBoxFilter
+      params:
+        box_frame: laser_frame
+        min_x: -0.25
+        max_x: 0.25
+        min_y: -0.25
+        max_y: 0.25
+        min_z: -0.25
+        max_z: 0.25

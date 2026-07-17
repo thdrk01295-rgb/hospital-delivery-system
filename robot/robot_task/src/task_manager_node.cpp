@@ -39,7 +39,7 @@ TaskManagerNode::TaskManagerNode(const rclcpp::NodeOptions & options)
   if (navigation_timeout_sec_ <= 0.0) {
     RCLCPP_WARN(get_logger(),
       "navigation_timeout_sec must be positive; using default 300.0 sec");
-    navigation_timeout_sec_ = 300.0;
+    navigation_timeout_sec_ = 3000.0;
   }
 
   // ── Load location map ──────────────────────────────────
