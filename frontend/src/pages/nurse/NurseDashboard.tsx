@@ -22,7 +22,7 @@ import { useRobotStore }               from '@/store/robotStore'
 import { useTaskStore }                from '@/store/taskStore'
 import { useInventoryStore }           from '@/store/inventoryStore'
 import { useAbnormalEventStore }       from '@/store/abnormalEventStore'
-import { useAuthStore }                from '@/store/authStore'
+import { useNurseAuthStore }           from '@/store/nurseAuthStore'
 import { RobotStatusBanner }           from '@/components/RobotStatusBanner'
 import { TaskCard }                    from '@/components/TaskCard'
 import { EmergencyStopButton }         from '@/components/EmergencyStopButton'
@@ -33,7 +33,7 @@ import type { Task }                   from '@/types'
 
 export function NurseDashboard() {
   const navigate   = useNavigate()
-  const { logout } = useAuthStore()
+  const { logout } = useNurseAuthStore()
 
   const { robot, setRobot }                                                   = useRobotStore()
   const { ongoingTasks, completedTasks, setOngoingTasks, setCompletedTasks, applyTaskUpdate } = useTaskStore()

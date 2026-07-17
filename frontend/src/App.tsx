@@ -11,23 +11,26 @@
  *   /tablet/:robotId         → TabletPage         (no auth)
  *
  * WebSocket:
- *   useWebSocket is mounted here once the user is logged in.
+ *   useWebSocket is mounted here once either role is authenticated.
  *   It broadcasts events to Zustand stores consumed by all pages.
  */
-import { Routes, Route, Navigate }  from 'react-router-dom'
-import { useAuthStore }              from '@/store/authStore'
-import { useWebSocket }              from '@/hooks/useWebSocket'
-import { ProtectedRoute }            from '@/components/ProtectedRoute'
-import { LoginPage }                 from '@/pages/LoginPage'
-import { NurseDashboard }            from '@/pages/nurse/NurseDashboard'
-import { OrderCreate }               from '@/pages/nurse/OrderCreate'
-import { PatientRequestPage }        from '@/pages/patient/PatientRequestPage'
-import { TabletPage }                from '@/pages/tablet/TabletPage'
+import { Routes, Route, Navigate }       from 'react-router-dom'
+import { useNurseAuthStore }              from '@/store/nurseAuthStore'
+import { usePatientAuthStore }            from '@/store/patientAuthStore'
+import { useWebSocket }                   from '@/hooks/useWebSocket'
+import { NurseProtectedRoute, PatientProtectedRoute } from '@/components/ProtectedRoute'
+import { LoginPage }                      from '@/pages/LoginPage'
+import { NurseDashboard }                 from '@/pages/nurse/NurseDashboard'
+import { OrderCreate }                    from '@/pages/nurse/OrderCreate'
+import { PatientRequestPage }             from '@/pages/patient/PatientRequestPage'
+import { TabletPage }                     from '@/pages/tablet/TabletPage'
 
 export default function App() {
-  const { token } = useAuthStore()
+  const nurseToken   = useNurseAuthStore((s) => s.token)
+  const patientToken = usePatientAuthStore((s) => s.token)
 
-  useWebSocket(Boolean(token))
+  // Open WebSocket whenever at least one role is authenticated in this tab.
+  useWebSocket(Boolean(nurseToken || patientToken))
 
   return (
     <Routes>
@@ -38,16 +41,16 @@ export default function App() {
 
       <Route
         path="/nurse/dashboard"
-        element={<ProtectedRoute role="nurse"><NurseDashboard /></ProtectedRoute>}
+        element={<NurseProtectedRoute><NurseDashboard /></NurseProtectedRoute>}
       />
       <Route
         path="/nurse/orders/new"
-        element={<ProtectedRoute role="nurse"><OrderCreate /></ProtectedRoute>}
+        element={<NurseProtectedRoute><OrderCreate /></NurseProtectedRoute>}
       />
 
       <Route
         path="/patient"
-        element={<ProtectedRoute role="patient"><PatientRequestPage /></ProtectedRoute>}
+        element={<PatientProtectedRoute><PatientRequestPage /></PatientProtectedRoute>}
       />
 
       <Route path="/tablet/:robotId" element={<TabletPage />} />

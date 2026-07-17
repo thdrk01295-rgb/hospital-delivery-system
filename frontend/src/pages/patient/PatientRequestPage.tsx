@@ -19,7 +19,7 @@ import { fetchRobotStatus }     from '@/api/robot'
 import { fetchPatientActiveTask, submitPatientClothingRequest, completeTask, cancelPatientTask } from '@/api/tasks'
 import { useRobotStore }        from '@/store/robotStore'
 import { useTaskStore }         from '@/store/taskStore'
-import { useAuthStore }         from '@/store/authStore'
+import { usePatientAuthStore }  from '@/store/patientAuthStore'
 import { resolvePatientScreenMode } from './PatientScreenController'
 import type { PatientClothingRequestCreate, RobotState } from '@/types'
 
@@ -222,7 +222,7 @@ type ItemFormMode = 'rental' | 'return' | null
 
 export function PatientRequestPage() {
   const navigate   = useNavigate()
-  const { logout, bedCode } = useAuthStore()
+  const { logout, bedCode } = usePatientAuthStore()
   const { robot, setRobot } = useRobotStore()
   const { patientActiveTask, setPatientActiveTask } = useTaskStore()
 

@@ -7,7 +7,8 @@
 import { useState, FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { loginNurse, loginPatient } from '@/api/auth'
-import { useAuthStore } from '@/store/authStore'
+import { useNurseAuthStore }   from '@/store/nurseAuthStore'
+import { usePatientAuthStore } from '@/store/patientAuthStore'
 
 interface Props {
   variant: 'nurse' | 'patient'
@@ -18,8 +19,9 @@ export function LoginPage({ variant }: Props) {
   const [password, setPassword] = useState('')
   const [error,    setError]    = useState<string | null>(null)
   const [loading,  setLoading]  = useState(false)
-  const { setAuth } = useAuthStore()
-  const navigate    = useNavigate()
+  const nurseStore   = useNurseAuthStore()
+  const patientStore = usePatientAuthStore()
+  const navigate     = useNavigate()
 
   const title = variant === 'nurse' ? '간호사 로그인' : '환자 로그인'
   const hint  = variant === 'nurse' ? 'worker' : '침상 번호 (예: 11011)'
@@ -29,11 +31,15 @@ export function LoginPage({ variant }: Props) {
     setError(null)
     setLoading(true)
     try {
-      const res = variant === 'nurse'
-        ? await loginNurse(username, password)
-        : await loginPatient(username, password)
-      setAuth(res.access_token, res.role, res.bed_code ?? null)
-      navigate(variant === 'nurse' ? '/nurse/dashboard' : '/patient', { replace: true })  // dashboard routes unchanged
+      if (variant === 'nurse') {
+        const res = await loginNurse(username, password)
+        nurseStore.setToken(res.access_token)
+        navigate('/nurse/dashboard', { replace: true })
+      } else {
+        const res = await loginPatient(username, password)
+        patientStore.setAuth(res.access_token, res.bed_code ?? '')
+        navigate('/patient', { replace: true })
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : '로그인 실패')
     } finally {

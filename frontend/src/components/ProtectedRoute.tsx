@@ -1,18 +1,19 @@
 import { Navigate } from 'react-router-dom'
-import { useAuthStore } from '@/store/authStore'
-import type { UserRole } from '@/types'
+import { useNurseAuthStore }   from '@/store/nurseAuthStore'
+import { usePatientAuthStore } from '@/store/patientAuthStore'
 
 interface Props {
   children: React.ReactNode
-  role: UserRole
 }
 
-export function ProtectedRoute({ children, role }: Props) {
-  const { token, role: userRole } = useAuthStore()
+export function NurseProtectedRoute({ children }: Props) {
+  const token = useNurseAuthStore((s) => s.token)
+  if (!token) return <Navigate to="/login/nurse" replace />
+  return <>{children}</>
+}
 
-  if (!token || userRole !== role) {
-    return <Navigate to={role === 'nurse' ? '/login/nurse' : '/login/patient'} replace />
-  }
-
+export function PatientProtectedRoute({ children }: Props) {
+  const token = usePatientAuthStore((s) => s.token)
+  if (!token) return <Navigate to="/login/patient" replace />
   return <>{children}</>
 }

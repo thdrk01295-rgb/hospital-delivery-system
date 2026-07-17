@@ -1,13 +1,13 @@
-import { api } from './client'
+import { publicApi } from './client'
 import type { RobotStatus } from '@/types'
 
 export function fetchRobotStatus() {
-  return api.get<RobotStatus>('/robot/status')
+  return publicApi.get<RobotStatus>('/robot/status')
 }
 
 /** Tablet UI: POST /robot/lock-command — no auth required. */
 export function sendLockCommand(robotId: string, command: 'UNLOCK' | 'LOCK') {
-  return api.post<{ status: string; payload: object }>('/robot/lock-command', {
+  return publicApi.post<{ status: string; payload: object }>('/robot/lock-command', {
     robot_id: robotId,
     command,
   })
@@ -23,5 +23,5 @@ export interface CompleteTaskResult {
 
 /** Tablet UI: POST /robot/complete-task — origin-stop or destination-stop completion. */
 export function completeRobotTask(robotId: string) {
-  return api.post<CompleteTaskResult>('/robot/complete-task', { robot_id: robotId })
+  return publicApi.post<CompleteTaskResult>('/robot/complete-task', { robot_id: robotId })
 }

@@ -1,45 +1,48 @@
-import { api } from './client'
+import { nurseApi, patientApi, publicApi } from './client'
 import type { Task, NurseOrderCreate, PatientClothingRequestCreate } from '@/types'
 
-// Nurse
+// ── Nurse endpoints (nurse JWT required) ─────────────────────────────────────
+
 export function createNurseOrder(body: NurseOrderCreate) {
-  return api.post<Task>('/tasks/nurse/order', body)
+  return nurseApi.post<Task>('/tasks/nurse/order', body)
 }
 
 export function cancelNurseTask(taskId: number) {
-  return api.post<Task>(`/tasks/nurse/cancel/${taskId}`)
+  return nurseApi.post<Task>(`/tasks/nurse/cancel/${taskId}`)
 }
 
 export function triggerEmergency() {
-  return api.post<Task>('/tasks/nurse/emergency')
+  return nurseApi.post<Task>('/tasks/nurse/emergency')
 }
 
 export function releaseEmergency() {
-  return api.post<{ status: string }>('/tasks/nurse/emergency/release')
+  return nurseApi.post<{ status: string }>('/tasks/nurse/emergency/release')
 }
 
-// Patient
+// ── Patient endpoints (patient JWT required) ──────────────────────────────────
+
 export function fetchPatientActiveTask() {
-  return api.get<Task | null>('/tasks/patient/me')
+  return patientApi.get<Task | null>('/tasks/patient/me')
 }
 
 export function submitPatientClothingRequest(body: PatientClothingRequestCreate) {
-  return api.post<Task>('/tasks/patient/request', body)
+  return patientApi.post<Task>('/tasks/patient/request', body)
 }
 
 export function completeTask(taskId: number) {
-  return api.post<Task>(`/tasks/${taskId}/complete`)
+  return patientApi.post<Task>(`/tasks/${taskId}/complete`)
 }
 
 export function cancelPatientTask() {
-  return api.post<Task>('/tasks/patient/cancel')
+  return patientApi.post<Task>('/tasks/patient/cancel')
 }
 
-// Shared
+// ── Public endpoints (no auth required by backend) ───────────────────────────
+
 export function fetchOngoingTasks() {
-  return api.get<Task[]>('/tasks/ongoing')
+  return publicApi.get<Task[]>('/tasks/ongoing')
 }
 
 export function fetchCompletedTasks() {
-  return api.get<Task[]>('/tasks/completed')
+  return publicApi.get<Task[]>('/tasks/completed')
 }
