@@ -352,6 +352,15 @@ def generate_launch_description():
             remappings=tf_remappings
         ),
         Node(
+            package='navigation',
+            executable='navigation_goal_bridge',
+            name='navigation_goal_bridge',
+            output='screen',
+            parameters=[{
+                'use_sim_time': use_sim_time
+            }]
+        ),
+        Node(
             package='nav2_waypoint_follower',
             executable='waypoint_follower',
             name='waypoint_follower',

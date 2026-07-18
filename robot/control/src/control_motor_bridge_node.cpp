@@ -189,7 +189,7 @@ public:
     command_finished_(false),
     command_success_(false)
   {
-    serial_port_ = declare_parameter<std::string>("serial_port", "/dev/ttyACM0");
+    serial_port_ = declare_parameter<std::string>("serial_port", "/dev/ttyACM1");
     baud_rate_ = declare_parameter<int>("baud_rate", 115200);
     timeout_sec_ = declare_parameter<double>("timeout_sec", 10.0);
     lift_command_timeout_sec_ = declare_parameter<double>("lift_command_timeout_sec", 15.0);
