@@ -248,6 +248,11 @@ def apply_inventory_effect_for_completed_task(
             f"top={inv.clothes_top_count} bottom={inv.clothes_bottom_count}"
         )
 
+    elif task.task_type == TaskType.USED_CLOTHES_COLLECTION:
+        inv.clothes_top_count    = 0
+        inv.clothes_bottom_count = 0
+        logger.info(f"[inventory] robot_id={robot_id} USED_CLOTHES_COLLECTION → top=0 bottom=0")
+
     # All other task types: no inventory change.
 
     return inv

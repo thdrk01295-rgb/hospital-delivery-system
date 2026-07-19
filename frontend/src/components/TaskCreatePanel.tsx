@@ -13,9 +13,9 @@ const ORDER_TYPES: { value: TaskType; label: string }[] = [
   { value: 'used_clothes_collection', label: '사용 의류 수거' },
 ]
 
-const CLOTHES_TYPES: TaskType[] = ['clothes_refill', 'used_clothes_collection']
-const NO_ORIGIN_TYPES: Set<TaskType> = new Set(['kit_delivery', 'kit_refill', 'clothes_refill'])
-const AUTO_DEST_TYPES: Set<TaskType> = new Set(['kit_refill', 'clothes_refill'])
+const CLOTHES_TYPES: TaskType[] = []
+const NO_ORIGIN_TYPES: Set<TaskType> = new Set(['kit_delivery', 'kit_refill', 'clothes_refill', 'used_clothes_collection'])
+const AUTO_DEST_TYPES: Set<TaskType> = new Set(['kit_refill', 'clothes_refill', 'used_clothes_collection'])
 type LocMode = 'fixed' | 'bed'
 
 export function TaskCreatePanel() {

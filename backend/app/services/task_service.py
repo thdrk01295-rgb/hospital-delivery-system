@@ -20,12 +20,14 @@ _NO_ORIGIN_NURSE_TYPES: set[str] = {
     TaskType.KIT_DELIVERY,
     TaskType.KIT_REFILL,
     TaskType.CLOTHES_REFILL,
+    TaskType.USED_CLOTHES_COLLECTION,
 }
 
 # Task types with a fixed server-resolved destination (nurse doesn't choose)
 _FIXED_DEST: dict[str, str] = {
-    TaskType.KIT_REFILL:    "WAREHOUSE-01",
-    TaskType.CLOTHES_REFILL: "LAUNDRY-01",
+    TaskType.KIT_REFILL:              "WAREHOUSE-01",
+    TaskType.CLOTHES_REFILL:          "LAUNDRY-01",
+    TaskType.USED_CLOTHES_COLLECTION: "LAUNDRY-01",
 }
 
 

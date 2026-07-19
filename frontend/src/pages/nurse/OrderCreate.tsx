@@ -25,13 +25,13 @@ const ORDER_TYPES: { value: TaskType; label: string }[] = [
 ]
 
 // Nurse logistics task types that carry clothing quantity fields
-const CLOTHES_TYPES: TaskType[] = ['clothes_refill', 'used_clothes_collection']
+const CLOTHES_TYPES: TaskType[] = []
 
 // Task types where the origin is not applicable (robot goes straight to destination)
-const NO_ORIGIN_TYPES: Set<TaskType> = new Set(['kit_delivery', 'kit_refill', 'clothes_refill'])
+const NO_ORIGIN_TYPES: Set<TaskType> = new Set(['kit_delivery', 'kit_refill', 'clothes_refill', 'used_clothes_collection'])
 
 // Task types where the destination is server-resolved — nurse does not pick it
-const AUTO_DEST_TYPES: Set<TaskType> = new Set(['kit_refill', 'clothes_refill'])
+const AUTO_DEST_TYPES: Set<TaskType> = new Set(['kit_refill', 'clothes_refill', 'used_clothes_collection'])
 
 // Task types that do NOT require a destination (emergency_call or auto-dest)
 const NO_DEST_REQUIRED: TaskType[] = ['emergency_call']

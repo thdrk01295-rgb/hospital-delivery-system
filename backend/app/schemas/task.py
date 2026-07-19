@@ -21,7 +21,7 @@ NURSE_CREATABLE_TASK_TYPES: set[TaskType] = {
 }
 
 # Types that never require the nurse to supply a destination (server resolves it)
-_AUTO_DEST_TYPES: set[TaskType] = {TaskType.KIT_REFILL, TaskType.CLOTHES_REFILL}
+_AUTO_DEST_TYPES: set[TaskType] = {TaskType.KIT_REFILL, TaskType.CLOTHES_REFILL, TaskType.USED_CLOTHES_COLLECTION}
 
 # Nurse-creatable types that must never carry an origin (robot goes straight to destination).
 # Patient types are not listed here because they are rejected by NURSE_CREATABLE_TASK_TYPES first.
@@ -29,6 +29,7 @@ _NO_ORIGIN_NURSE_TYPES: set[TaskType] = {
     TaskType.KIT_DELIVERY,
     TaskType.KIT_REFILL,
     TaskType.CLOTHES_REFILL,
+    TaskType.USED_CLOTHES_COLLECTION,
 }
 
 
