@@ -5,7 +5,7 @@ scan_to_scan_filter_chain:
       type: laser_filters/LaserScanAngularBoundsFilterInPlace
       params:
         lower_angle: -1.0472
-        upper_angle: 0.6458
+        upper_angle: 0.6850
         replace_with_nan: true
 
     filter2:
@@ -13,9 +13,12 @@ scan_to_scan_filter_chain:
       type: laser_filters/LaserScanBoxFilter
       params:
         box_frame: laser_frame
-        min_x: -0.25
-        max_x: 0.25
-        min_y: -0.25
-        max_y: 0.25
+
+        min_x: -0.30
+        max_x: 0.30
+
+        min_y: -0.41
+        max_y: 0.39
+
         min_z: -0.25
         max_z: 0.25

@@ -15,7 +15,7 @@
   <xacro:property name="tof_size" value="0.035 0.02 0.02"/>
   <xacro:property name="tof_direction_size" value="0.08 0.008 0.008"/>
 
-  <xacro:property name="lidar_x" value="0.27"/>
+  <xacro:property name="lidar_x" value="0.30"/>
   <xacro:property name="lidar_y" value="0.0"/>
   <xacro:property name="lidar_z" value="0.175"/>
 

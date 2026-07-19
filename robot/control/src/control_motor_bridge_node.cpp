@@ -191,9 +191,9 @@ public:
   {
     serial_port_ = declare_parameter<std::string>("serial_port", "/dev/ttyACM1");
     baud_rate_ = declare_parameter<int>("baud_rate", 115200);
-    timeout_sec_ = declare_parameter<double>("timeout_sec", 10.0);
-    lift_command_timeout_sec_ = declare_parameter<double>("lift_command_timeout_sec", 15.0);
-    reset_command_timeout_sec_ = declare_parameter<double>("reset_command_timeout_sec", 25.0);
+    timeout_sec_ = declare_parameter<double>("timeout_sec", 30.0);
+    lift_command_timeout_sec_ = declare_parameter<double>("lift_command_timeout_sec", 30.0);
+    reset_command_timeout_sec_ = declare_parameter<double>("reset_command_timeout_sec", 30.0);
     require_ready_ = declare_parameter<bool>("require_ready", true);
     emergency_stop_command_ = declare_parameter<std::string>("emergency_stop_command", "k");
 
